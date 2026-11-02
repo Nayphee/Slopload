@@ -1,0 +1,11 @@
+{
+  "_comment": "Extra parts loaded with the game. A part with 'music' is only loaded when a song is chosen (-music N); its claim covers the file plus 'workspace' bytes after it.",
+  "music": {
+    "prg": "../../music/build/playload_music.prg",
+    "workspace": 289,
+    "songs": [
+      "Enigma Street",
+      "SlopLoad"
+    ]
+  }
+}
