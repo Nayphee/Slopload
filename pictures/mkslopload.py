@@ -4,7 +4,7 @@
 through them, a white top edge, blue depth and black speed lines,
 a rippling reflection under it, rainbow stripes at the top and bottom and
 a few stars. It goes on SlopLoad 64's disks (tools/c64build.py) and is a
-picture to try -show picture with on the PC tool.
+picture to try on the PC tool (-module pictures/slopload.koa) and PICTURE-LM.
 
 Run by hand after changing it; with a file name, also a picture of it
 (a PNG, twice the size):

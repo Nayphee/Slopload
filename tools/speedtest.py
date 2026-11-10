@@ -3,11 +3,15 @@
 several speeds, one after another, each its own file "SPEED N".
 
     speedtest.py out.tap|out.wav [-speeds 3,5,7,9,11,13] [-show MODE|all]
-                 [-module NAME] [-picture file.koa] [-kb 16] [-precomp deck.json]
+                 [-module FILE] [-sid FILE|none] [-picture file.koa] [-kb 16]
+                 [-precomp deck.json]
 
-MODE is what shows while loading (slopload.py -show): module (Flappy-Load,
-the default; -module another), none (screen off), picture, picmusic
-(pictures/slopload.koa unless -picture gives another), music. -show all
+MODE is what shows while loading (slopload.py -show): module (the demo
+Flappy-Load, build/modules/flappy.lm, unless -module gives another .lm),
+none (screen off), picture, picmusic (pictures/slopload.koa unless
+-picture gives another), music. The module and the music shows play the
+demo tune music/build/enigma.sid unless -sid gives another (none: the
+module without music). -show all
 makes one tape per mode, out-<mode>.tap, so each situation can be
 measured on the deck; each file's name carries its mode
 ("SPEED 7 PIC+MUS").
@@ -49,11 +53,12 @@ def make(out, show, speeds, opt):
                        check=True, capture_output=True)
         for sp in speeds:
             args = [prg, os.path.join(d, f's{sp}.tap'), '-speed', str(sp),
-                    '-filename', f'SPEED {sp} {TAG[show]}', '-show', show]
+                    '-filename', f'SPEED {sp} {TAG[show]}']
+            args += ['-module', opt['picture']] if show in ('picture', 'picmusic') else ['-show', show]
             if show == 'module' and opt['module']:
                 args += ['-module', opt['module']]
-            if show in ('picture', 'picmusic'):
-                args += ['-picture', opt['picture']]
+            if show in ('module', 'picmusic', 'music') and str(opt['sid']).lower() != 'none':
+                args += ['-sid', opt['sid']]
             if opt['precomp']:
                 args += ['-precomp', opt['precomp'], '-hires']
             o, pos = S.parse_args(args)
@@ -75,7 +80,7 @@ def make(out, show, speeds, opt):
         T.tap_write(out, pulses, hires=bool(opt['precomp']))
     print(f"{out}: {len(speeds)} files, {sum(pulses) / T.PAL_HZ / 60:.1f} minutes,"
           f" a {opt['kb']} KB test program each, show {show}"
-          + (f" ({opt['module']})" if show == 'module' and opt['module'] else ""))
+          + (f" ({os.path.basename(opt['module'])})" if show == 'module' and opt['module'] else ""))
     return 0
 
 
@@ -84,7 +89,9 @@ def main(argv):
         print(__doc__)
         return 1
     out = argv[0]
-    opt = {'speeds': '3,5,7,9,11,13', 'show': 'module', 'kb': '16', 'precomp': None, 'module': None,
+    opt = {'speeds': '3,5,7,9,11,13', 'show': 'module', 'kb': '16', 'precomp': None,
+           'module': os.path.join(ROOT, 'build', 'modules', 'flappy.lm'),
+           'sid': os.path.join(ROOT, 'music', 'build', 'enigma.sid'),
            'picture': os.path.join(ROOT, 'pictures', 'slopload.koa')}
     i = 1
     while i < len(argv):

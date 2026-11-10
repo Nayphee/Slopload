@@ -54,10 +54,14 @@ def expand(path, seen=None):
     return '\n'.join(out) + '\n'
 
 
-def assemble(path, name, subst=None):
+def assemble(path, name, subst=None, transform=None):
     """Assemble one source. Returns (origin, data, labels).
-    subst: {equate name: value} replaces `name = ...` lines."""
+    subst: {equate name: value} replaces `name = ...` lines; transform:
+    a function of the expanded source's text, applied first
+    (tools/c64build.py's message packing)"""
     src = expand(path)
+    if transform:
+        src = transform(src)
     for k, v in (subst or {}).items():
         src, n = re.subn(rf'(?m)^{k}\s*=.*$', f'{k} = ${v:04x}', src)
         if n != 1:
@@ -91,6 +95,8 @@ def build_loader():
     o, d, lab = assemble(src, 'stage1')
     low = lab['s1lowend'] - lab['s1lo']
     o, d, lab = assemble(src, 'stage1', {'s1lo': 0x0300 - low})
+    if lab['s1rel'] != lab['s1ioi']:
+        raise SystemExit(f"stage1: s1rel must be at abi.asm's s1ioi, is ${lab['s1rel']:04X}")
     if lab['s1lowend'] != 0x0300 or o < 0x02a7:
         raise SystemExit(f"stage1 low part must fit $02a7-$02ff ({low} bytes)")
     end = o + len(d)
@@ -111,10 +117,21 @@ def build_loader():
     # border stripes in a style (slopload.py -stripes): the colour from a
     # table the tool fills, 4 cycles more in the interrupt
     build_core('core_stripes', False, blocks=STRIPE_EDITS)
+    # loading line effects (slopload.py -stripes classic, thin, and:N,
+    # ora:N, eor:N, mixed): 8 bytes of the tool's code at the stripe
+    build_core('core_fx', False, blocks=FX_EDITS)
     # no stripes, the border one colour (slopload.py -stripes black, 6,
     # block): the per-pulse store off, the colour kept by the main loop
     build_core('core_flat', False, blocks=FLAT_EDITS)
     flat_check()
+    for name in ('core', 'core_stripes', 'core_flat', 'core_fx'):      # (setm: low bytes only)
+        lb = json.load(open(os.path.join(BUILD, name + '.sym.json')))
+        for t in ('cbase', 'pbase'):
+            if (lb[t] & 0xff) + 14 > 0x100:
+                raise SystemExit(f"{name}: {t} crosses a page (setm sets its low byte only)")
+    lb = json.load(open(os.path.join(BUILD, 'core_fx.sym.json')))
+    if (lb['stripe'] & 0xff) + 8 > 0x100:
+        raise SystemExit("core_fx: the effect crosses a page (the tool sets its stores' low bytes)")
     lab = json.load(open(os.path.join(BUILD, 'core_stripes.sym.json')))
     if (lab['stab'] & 0xff) > 0x100 - 12:
         raise SystemExit("core_stripes: the colour table crosses a page (a cycle more)")
@@ -134,6 +151,46 @@ STRIPE_EDITS = [
     ("g_init  jmp (pt_init)",
      "stab    byte 0,1,2,3,4,5,6,7,8,9,10,11   ; colour by timer b value (the tool)\n"
      "g_init  jmp (pt_init)"),
+]
+
+
+# the effects variant (slopload.py -stripes classic, thin, and:N, ora:N,
+# eor:N, mixed): where the core has stx $d020, the effect's 8 bytes (the
+# tool's, as classic loaders did it). Its stores (one or two) are turned
+# off by stroff (bit $d020) and on by stron, which also puts the border
+# back to the effect's own colour (after a tape error's red); the tool
+# sets their opcodes and places (fxs: the stores' low bytes, the effect
+# within a page). Made so that SlopLoad 64 can make it from the core in
+# place (c64build.py fx_patch): the effect's 5 more bytes the only thing
+# inserted, fstr, errshow's way back and stroff changed at their own
+# length, and stron after everything
+FX_LEN = 8
+FX_EDITS = [
+    ("stripe  stx $d020               ; border stripes ($2c: bit, when off)",
+     "stripe  lda $d020               ; the effect, 8 bytes (the tool's)\n"
+     "        eor #$00\n"
+     "        inc $d020"),
+    ("fstr    lda #$8e\n        sta stripe              ; stx: stripes on",
+     "fstr    jsr stron               ; stripes on\n"
+     "        nop\n"
+     "        nop"),
+    ("@ok     lda #$8e                ; stx $d020\n        sta stripe\n        rts\n",
+     "@ok     jmp stron\n        nop\n        nop\n        nop\n"),
+    ("stroff  lda #$2c                ; bit $d020\n        sta stripe\n        rts\n",
+     "stroff                          ; off: the stores bit $d020 (uses a, x)\n"
+     "fxa0    lda #$ad                ; (opcodes: the tool's)\n"
+     "fxb0    ldx #$2c\n"
+     "        bne fxs                 ; (always)\n"),
+    ("\nxstubend\n",
+     "\nxstubend\n"
+     "stron                           ; on: the border the effect's colour,\n"
+     "fxbc    lda #0                  ; (the tool's)\n"
+     "        sta $d020\n"
+     "fxa1    lda #$ad                ; and its stores (opcodes: the tool's)\n"
+     "fxb1    ldx #$ee\n"
+     "fxs     sta stripe              ; (their places: the tool's)\n"
+     "fxs2    stx stripe+5\n"
+     "        rts\n"),
 ]
 
 
@@ -216,6 +273,9 @@ def build_core(name, measure, subst=None, edits=(), blocks=()):
     print(f"{name:7s} ${o:04X}-${end - 1:04X}  {len(d):4d} bytes  (exit stub {stub} bytes)")
 
 
+CHAIN_PETSCII = 0xa000          # PETSCII-Load's main part in a chain (slopload.py -then)
+
+
 def build_modules():
     gdir = os.path.join(ROOT, 'modules')
     os.makedirs(os.path.join(BUILD, 'modules'), exist_ok=True)
@@ -256,9 +316,23 @@ def build_modules():
             spec['low'] = {'prg': lp, 'always': True}
             lm += struct.pack('<HH', low[0], len(low[1])) + bytes(low[1])
         open(os.path.join(BUILD, 'modules', g + '.lm'), 'wb').write(lm)
+        if g == 'petscii':              # (and at $a000 for a chain, clear of a picture: petscii.py)
+            o2, d2, lab2 = assemble(src, 'module_petscii_chain', {'petbase': CHAIN_PETSCII,
+                                                                   'lowat': CHAIN_PETSCII - 0x400})
+            top = lab2['mainpart']
+            if bytes(d2[:lab2['lowend'] - o2]) != bytes(low[1]):
+                raise SystemExit("petscii: the chain's build has another screen part")
+            if lab2['modend'] > 0xb000:
+                raise SystemExit("petscii: the chain's build runs into a font's room at $B000")
+            open(os.path.join(BUILD, 'modules', 'petscii_chain.prg'), 'wb').write(
+                asm6502.to_prg(top, d2[top - o2:]))
+            print(f"     {'(chain)':8s} ${top:04X}-${lab2['modend'] - 1:04X}  {lab2['modend'] - top:4d} bytes")
         if g == 'show':                 # (the tools build it in: no .lm)
             os.remove(os.path.join(BUILD, 'modules', g + '.lm'))
-        parts = os.path.join(gdir, g, 'parts.json')     # extra files: music
+        parts = os.path.join(gdir, g, 'parts.json')     # extra files a module brings
+        built = os.path.join(BUILD, 'modules', g + '.parts.json')
+        if not os.path.exists(parts) and not spec and os.path.exists(built):
+            os.remove(built)                            # (one from before: nothing now)
         if os.path.exists(parts) or spec:
             spec.update(json.load(open(parts)) if os.path.exists(parts) else {})
             for k, v in spec.items():       # paths: beside the parts file, else from SlopLoad's folder

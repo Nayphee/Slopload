@@ -1,20 +1,30 @@
 ; ------------------------------------------------------------
 ; modkit.asm  -  what every SlopLoad module does the same way
-; (the standard: DESIGN.md section 8). A game includes it after its
-; own equates, and gets:
-;   gk_musinit  copy the header's music fields (call first in init)
+; (the standard: MODULES.md). A module includes it after its own
+; equates (and modinit.asm, the routines only init calls: gk_musinit,
+; sidinit), and gets:
 ;   musicgo     start the song the tool chose; mstop, minit, mplay
-;   sidinit     the SID cleared, voice 3 ready for effects
 ;   soundkey    S turns the music off and on
 ;   readfire    fire on joystick port 2 (fpress: a fresh press)
-;   startkey    once loaded, a fresh SPACE sets exitreq
-;   status      the status line: LOADING and a bar with the percent,
-;               TAPE ERROR (flashing), LOADED! PRESS SPACE...
+;   startkey    once loaded, exitreq: at once, or with the tool's -wait
+;               on a fresh SPACE (the module plays on until then)
+;   gk_done     a game over: once loaded, exitreq (with -wait, the end
+;               of a game starts the program too)
+;   gk_exit     the frame's last call: c set when the module may end,
+;               exitreq set and the music faded out first (fadekit.asm:
+;               every module includes it, where it has room)
+;   status      the status line: LOADING and a bar with the percent (or
+;               with -countdown the blocks still to load), TAPE ERROR
+;               (flashing), LOADED! PRESS SPACE...
 ;   random      16-bit lfsr
-; It needs from the game:
+;   gk_bord     the border, unless it is the loader's
+; It needs from the module:
 ;   zero page   frm fire fpress spc skey exitreq smode sprog musicon
 ;               rnd (2) tmp tmp2 tmp3 pt2 (2); dbg_space $8e,
-;               dbg_auto $8f (debug hooks, the same in every game)
+;               dbg_auto $8f (debug hooks, the same in every module)
+;   fadekit.asm included (anywhere), and its scratch fsh fkn fsv:
+;               25, 25 and 34 bytes untouched while the module still runs
+;               once the program is in (fadescr.asm: as bytes)
 ;   sbcell      a byte anywhere (the bar's last filled cell)
 ;   scra scrb   its two screens (one screen: the same address twice)
 ;   gk_srow     the status line's offset in a screen (row x 40)
@@ -25,37 +35,25 @@
 ;   autopilot   (debug) a = 0 to press fire, $10 not
 ; ------------------------------------------------------------
 music_stop = $c006              ; the built-in player's stop
+fstep = 8                       ; the fade: ticks a volume step (16 x 8: 2.6 s at 50 Hz)
+gk_chain = $10                  ; header +28 (and +27) bit 4: a chain's music playing on
 music_flags = $c009             ; ... and flags: bit 0 leave voice 3 alone, bit 7 ntsc
 
-; gk_musinit  the music's addresses from the header (it may be drawn
-; over later: a game's character set often starts there)
-gk_musinit
-        lda hminit
-        sta minit+1
-        lda hminit+1
-        sta minit+2
-        lda hmplay
-        sta mplay+1
-        lda hmplay+1
-        sta mplay+2
-        lda hmflags
-        sta mflags
+; gk_bord  the border = a, unless it is the loader's (ld_state bit 5:
+; -showstripes, the loading lines on through the module)
+;   uses: nothing (a, x, y kept; the flags a's)
+gk_bord pha
+        lda #$20
+        bit ld_state
+        bne @x
+        pla
+        sta $d020
+        rts
+@x      pla
         rts
 
 ; ---- sound: the music on voices 1 and 2 (and 3 when no effect
 ; plays: the built-in player is told to leave voice 3 alone) ----
-sidinit ldx #$18
-        lda #0
-@c      sta $d400,x
-        dex
-        bpl @c
-        lda #$0f
-        sta $d418
-        lda #$08
-        sta $d410
-        sta $d411               ; voice 3 pulse 50%
-        rts
-
 ; musicgo  start the song the tool chose (if any)
 musicgo lda #0
         sta musicon
@@ -70,15 +68,27 @@ musicgo lda #0
         bcc @p
         ora #$80                ; ntsc pitch table
 @p      sta music_flags
-@in     lda hsong
+@in     lda gk_opt              ; a chain's second module (+28 bit 4): the
+        and #gk_chain           ; tune is playing already, started by the
+        bne @on                 ; module before: it plays on
+        lda hsong
         jsr minit
+@on     lda gk_opt              ; (once: S starts it again from its start)
+        and #$ff-gk_chain
+        sta gk_opt
         lda #1
         sta musicon
 @x      rts
 
-; the music's entry points (from the header: gk_musinit)
+; the music's entry points (from the header: gk_musinit): minit, and
+; mplay the tick's music: the tune's play routine (mplayr), or once
+; gk_exit has begun the fade, the fade's tick (which plays it quieter)
 minit   jmp $c000
-mplay   jmp $c003
+mplay   lda gk_fade
+        beq mplayr
+        jmp fade
+mplayr  jmp $c003
+gk_fade byte 0                  ; 1: fading out (gk_exit)
 mstop   lda mflags
         lsr a
         bcc @sid
@@ -90,6 +100,8 @@ mstop   lda mflags
         bpl @c
         rts
 mflags  byte 1                  ; 1 the built-in player, 2 a sid (no effects)
+gk_opt  byte 0                  ; header +28: the tool's options (gk_musinit)
+gk_blk  byte 0                  ; header +26: the program's blocks (gk_musinit)
 
 ; soundkey  s: music off and on
 soundkey
@@ -135,13 +147,17 @@ readfire
         rts
 
 ; ------------------------------------------------------------
-; startkey  once the program is loaded, space starts it (a fresh
-; press: joystick 1's fire reads on the same line, so not while it
-; is held)
+; startkey  once the program is loaded, it starts (exitreq): at once,
+; or with the tool's -wait (header +28 bit 1, gk_opt) on a fresh SPACE
+; press, the module playing on until then (joystick 1's fire reads on
+; the same line, so not while it is held). Call it once a tick
 ; ------------------------------------------------------------
 startkey
         bit ld_state
         bpl @x
+        lda gk_opt
+        and #2
+        beq @go                 ; no -wait: now
         lda dbg_space
         bne @go
         lda #$ff
@@ -163,6 +179,44 @@ startkey
 @x      rts
 @up     lda #0
         sta spc
+        rts
+
+; ------------------------------------------------------------
+; gk_done  a game is over: once the program is in, it starts. Only
+; -wait (header +28 bit 1) keeps a module running once it's in
+; (startkey), so this is its other way out: SPACE, or the end of a game
+;   out:  c set: asked to start (exitreq 1); c clear: still loading
+;   uses: a
+; ------------------------------------------------------------
+gk_done bit ld_state
+        bpl @no
+        lda #1
+        sta exitreq
+        sec
+        rts
+@no     clc
+        rts
+
+; ------------------------------------------------------------
+; gk_exit  the frame's last call, for its carry: set when the module
+; may end. Asked to (exitreq, from startkey or gk_done), it ends at
+; once with no music playing; with music the tune fades out first (the
+; module plays on for its 2.6 seconds: mplay plays the fade), as the
+; loading screens' does
+;   out:  c set: end; c clear: run on
+;   uses: a
+; ------------------------------------------------------------
+gk_exit lda exitreq
+        beq @no
+        lda musicon
+        beq @yes                ; (no music: at once)
+        lda fdone
+        bne @yes                ; (faded)
+        lda #1
+        sta gk_fade
+@no     clc
+        rts
+@yes    sec
         rts
 
 ; ------------------------------------------------------------
@@ -315,31 +369,67 @@ barc    sta tmp3
         beq @cell
         lda tmp2
         sta sbcell
-        lda sprog               ; percent = progress * 100 / 256
-        lsr a                   ; = p/4 + p/8 + p/64
-        lsr a
-        sta tmp
-        lsr a
+; the number after the bar: the percent (" 97%": hundreds at column 33,
+; leading zeros blank), or with -countdown (header +28 bit 3) the
+; blocks still to load ("024" at 34-36, over the %): header +26, the
+; program's blocks that load while the module runs, less their share
+; loaded
+        ldy #0                  ; y: 0 the percent, 1 the count
+        lda gk_opt
+        and #8
+        beq @pc
+        iny
+        lda gk_blk
+        byte $2c                ; (bit abs: past the lda #100)
+@pc     lda #100
+        sty tmp3                ; 0: zeros blank until a digit, 1: shown
+        sta tmp                 ; progress x m / 256 (m: 100 or the blocks)
+        lda sprog
         sta tmp2
-        lsr a
-        lsr a
-        lsr a
+        lda #0
+        ldx #8
+        lsr tmp2
+@mul    bcc @ns
         clc
         adc tmp
-        adc tmp2                ; 0-97
-        ldx #c_digit0-1         ; tens digit
-@t      inx
+@ns     ror a
+        ror tmp2
+        dex
+        bne @mul
+        cpy #0
+        beq @pr                 ; the percent, 0-99
+        eor #$ff                ; the count: m less the blocks loaded
         sec
+        adc tmp
+@pr     ldx #c_digit0-1         ; hundreds
+        sec
+@h      inx
+        sbc #100
+        bcs @h
+        adc #100
+        jsr @put
+        ldx #c_digit0-1         ; tens
+        sec
+@t      inx
         sbc #10
         bcs @t
         adc #10+c_digit0
-        sta scra+gk_srow+35
-        sta scrb+gk_srow+35
+        jsr @put
+        sta tmp3                ; units: always shown
+        tax
+@put    pha
         cpx #c_digit0
-        bne @t2
+        bne @nz
+        lda tmp3
+        bne @st                 ; zeros shown (the count, or after a digit)
         ldx #c_space
-@t2     stx scra+gk_srow+34
-        stx scrb+gk_srow+34
+        byte $2c                ; (bit abs: past the stx; reads ram at tmp3*256+$86)
+@nz     stx tmp3
+@st     txa
+        sta scra+gk_srow+33,y
+        sta scrb+gk_srow+33,y
+        pla
+        iny
         rts
 gk_x8   byte 0,8,16,24,32,40,48,56,64,72,80,88,96,104,112,120,128,136,144,152
 

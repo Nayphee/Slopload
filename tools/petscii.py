@@ -5,7 +5,7 @@ module (modules/petscii, PETSCII-Load).
 
     petscii.py SCREEN OUT.lm [-screen N] [-font FONT.64c] [-scroll TEXT]
                [-scrollrow N] [-scrollspeed N] [-scrollcolours HEX]
-               [-counter ROW,COL]           the module, for SlopLoad 64
+               [-counter ROW,COL] [-chain]  the module, for SlopLoad 64
     petscii.py SCREEN -info [-screen N]     what the file holds
 
 -font FONT.64c   the screen in a font of its own: a .64c file (as Petmate
@@ -27,7 +27,12 @@ module (modules/petscii, PETSCII-Load).
                  the message moves through them; column 0 is the
                  background's (the message leaves the row there)
 -counter ROW,COL a block counter: three digits there (in the screen's
-                 colours) counting the program's blocks down to 000
+                 colours) counting the program's blocks down to 000 (first
+                 in a chain: the next module's blocks)
+-chain           the module's main part at $A000, not $E000: for a chain
+                 (slopload.py -module A -then B), where the other module,
+                 a picture's, is at $C000-$FFBF (the PC tool does this by
+                 itself for a screen given as -module or -then)
 
 SCREEN is one of:
   .petmate  Petmate's own file (JSON): its first screen, or -screen N
@@ -280,9 +285,12 @@ def load_prg(path):
     return d[0] | d[1] << 8, d[2:]
 
 
-def template():
-    """the PETSCII-Load module as built: (main address, bytes), (low address, bytes)"""
-    main, low = os.path.join(MODS, 'petscii.prg'), os.path.join(MODS, 'petscii_low.prg')
+def template(chain=False):
+    """the PETSCII-Load module as built: (main address, bytes), (low address,
+    bytes); chain: its main part at $A000, for a chain (slopload.py -then),
+    clear of a picture module's $C000-$FFBF"""
+    main = os.path.join(MODS, 'petscii_chain.prg' if chain else 'petscii.prg')
+    low = os.path.join(MODS, 'petscii_low.prg')
     if not (os.path.exists(main) and os.path.exists(low)):
         raise Bad("the PETSCII-Load module isn't built (run tools/build.py)")
     return load_prg(main), load_prg(low)
@@ -328,21 +336,22 @@ def font_part(codes, msg=b'', counter=False, font=b''):
             {c: i for i, c in enumerate(order)}, FONT_D018[small])
 
 
-def module(scr, msg=b'', row=24, speed=2, counter=None, notes=None, colours=None):
+def module(scr, msg=b'', row=24, speed=2, counter=None, notes=None, colours=None, chain=False):
     """the module with this screen in it, and a scrolling message (screen
     codes) and a counter (row, column) if given: [(address, bytes)], the
     main part first, then a font of its own (font_part) if it has one,
     then the screen's codes. colours: the message's row's colours for
     columns 1-39 (39 of them) instead of the screen's. The rows next to
     the message are cleared (clear_next); notes, a list, gets what was
-    cleared and the font's characters"""
+    cleared and the font's characters. chain: the main part at $A000
+    (template)"""
     check(scr, msg, row, speed, counter, colours)
     if msg:
         was = scr
         scr, gone = clear_next(scr, row)
         if gone and notes is not None:
             notes.append(cleared_note(was, row, gone))
-    (ma, md), (la, ld) = template()
+    (ma, md), (la, ld) = template(chain)
     if md[:4] != b'PLG1' or len(ld) != W * H or len(md) < EXT_AT + EXT_LEN:
         raise Bad("the PETSCII-Load module isn't the expected layout (rebuild it)")
     code = len(md) - (md[EXT_AT + 4] | md[EXT_AT + 5] << 8)    # (the template's own message off)
@@ -367,8 +376,10 @@ def module(scr, msg=b'', row=24, speed=2, counter=None, notes=None, colours=None
                                               len(msg), space, digit0)
     md[10:12] = struct.pack('<H', ma + len(md))         # the claim: to the message's end
     md[14] = SHARE[bool(msg)]
-    if ma + len(md) > 0xfffa:
-        raise Bad("the message is too long for the module's memory")
+    top = min([a for a, _ in fpart] + [la]) if chain else 0xfffa
+    if ma + len(md) > top:
+        raise Bad(f"the message is too long for the module's memory (${ma:04X}-${top - 1:04X}"
+                  + (", under the font's part" if chain and fpart else "") + ")")
     return [(ma, bytes(md))] + fpart + [(la, bytes(codes))]
 
 
@@ -429,6 +440,8 @@ def main(argv):
     opt = {'-screen': '0', '-scroll': None, '-scrollrow': None, '-scrollspeed': None, '-scrollcolours': None,
            '-counter': None, '-font': None}
     rest = []
+    chain = '-chain' in argv
+    argv = [a for a in argv if a != '-chain']
     i = 0
     while i < len(argv):
         if argv[i] in opt and i + 1 < len(argv):
@@ -446,7 +459,7 @@ def main(argv):
         if len(argv) < 2 or argv[1] == '-info':
             return 0
         notes = []
-        parts = module(scr, **options(opt, scr), notes=notes)
+        parts = module(scr, **options(opt, scr), notes=notes, chain=chain)
     except (Bad, ValueError) as ex:
         print(f"petscii: {ex}", file=sys.stderr)
         return 1

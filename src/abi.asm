@@ -10,6 +10,8 @@
 ld_state = $02          ; bit7 main data loaded (wrap up, then return
                         ;      carry set from frame)
                         ; bit6 tape error: rewind a little and press play
+                        ; bit5 the border is the loader's (-showstripes:
+                        ;      its stripes): leave $d020 alone
                         ; bit1 autorun (the game will be cut off at bit7)
                         ; bit0 ntsc machine (1) / pal (0)
 ld_progress = $03       ; 0-255 share of the main program loaded
@@ -33,6 +35,7 @@ gm_zp = $10
 ; ---- block flags (header byte 5) ----
 f_gameready = $01       ; the module is complete: start it
 f_mainend = $02         ; all data loaded while the game runs is in
+f_chain = $04           ; a chain's second module is in: switch to it (src/chain.asm)
 f_last = $80            ; final block: start the program
 
 ; ---- tape timing ----
@@ -61,6 +64,9 @@ port_ram = $14          ; all ram, motor on (stores under i/o)
 port_off = $35          ; ram / i/o / ram, motor off
 
 ; Games: no decimal mode (sed): the loader's interrupt doesn't clear it.
+
+s1ioi = $02f9           ; stage 1's last 7 bytes, kept to the end: ioinit, then
+                        ; $dd0d read (the RESTORE lock off: the core's exit)
 
 ; ---- game module header (at the game's load address) ----
 ; +0 "plg1"   +4 init   +6 frame   +8 stop   (words)

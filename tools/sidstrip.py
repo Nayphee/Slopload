@@ -474,7 +474,7 @@ def strip(path, song=None, frames=15000, cut=False):
     tp = dict(t, data=bytes(data))
     relocs, reloc_why = None, None
     try:
-        traced = R.trace(tp, song, frames)
+        traced = R.trace(tp, song, frames, player=slp_player(t['load'], tp['data'], t['init'], t['play']))
         to = R.test_target(tp, traced[1])
         if to is None:
             raise R.Unmovable("there is no room to try a move")
@@ -512,6 +512,16 @@ def game_ok(m, claims=((0xe000, 0xfc00),), name='the module'):
         return (f"its play call takes up to {m['play_clk']} cycles; a module's frame has"
                 f" room for {GAME_PLAY_MAX}")
     return None
+
+
+def slp_player(load, data, init, play):
+    """True for a tune in SlopLoad's own player (music/player.asm): its
+    jump table at the start of a page (init, play, stop, then the flags
+    byte), init and play its first two jumps, "SLP1" after the flags. At
+    $C000 a module's kit finds its stop and flags where it looks ($C006,
+    $C009): voice 3 for the module's effects, the NTSC pitch table"""
+    return (load & 255 == 0 and init == load and play == load + 3 and len(data) >= 14
+            and data[0] == data[3] == data[6] == 0x4c and bytes(data[10:14]) == b'SLP1')
 
 
 def write_slm(path, m):

@@ -156,6 +156,7 @@ HEADER_SEED = 0xa5
 
 F_GAMEREADY = 0x01
 F_MAINEND = 0x02
+F_CHAIN = 0x04           # a chain's second module is in: switch to it (src/chain.asm)
 F_LAST = 0x80
 
 

@@ -1,17 +1,20 @@
 ; ------------------------------------------------------------
-; fadekit.asm  -  a loading screen's end (PETSCII-Load, OZ GOLD): once
-; the program is in, the screen stays (the counter at 000) and the music
-; fades out, 16 steps of the module's fstep ticks (PETSCII-Load and OZ
-; GOLD: 8, about 2.6 seconds), before the module asks to stop.
+; fadekit.asm  -  every module's end: once the program is in (and the
+; module has asked to end: a game's kit, gk_exit; a loading screen
+; keeps its screen, the counter at 000), the music fades out, 16 steps
+; of fstep ticks (the kit's 8: about 2.6 seconds), before the module
+; ends. The kit includes it; the show module too.
 ;
-; The module calls fade from its tick once ld_state bit 7 is set (the
-; loader's "loaded": the tape is stopped), instead of the music, and
-; has:
-;   fstep        ticks a volume step (an equate)
+; The module (or the kit's mplay) calls fade from its tick once ld_state
+; bit 7 is set (the loader's "loaded": the tape is stopped), instead of
+; the music, and has:
+;   fstep        ticks a volume step (an equate: the kit's)
 ;   zero page    tmp, musicon, exitreq (the kit's)
+;   mplayr       the tune's play routine (the kit's), mflags
 ;   fsh fkn fsv  scratch free once loaded: 25, 25 and 34 bytes
 ;   fdirect      1 (set in init) when its tune sets $d418 at its init
 ;                only, filter off: then it fades as the built-in player
+; and at the end fdone is 1 (as exitreq).
 ;
 ; $d418 is write-only, so a tune's filter mode (its top half) can't be
 ; read back, and writing the volume alone would silence the voices a
@@ -51,7 +54,7 @@ fade    lda fadev
         bne @bi
         jsr fsid
         jmp @st
-@bi     jsr mplay               ; (filter off: $d418 the volume)
+@bi     jsr mplayr              ; (filter off: $d418 the volume)
         lda #15
         jsr fscale
         sta $d418
@@ -64,6 +67,7 @@ fade    lda fadev
         inc fadev               ; (0: silent) the program now
         lda #1
         sta exitreq
+        sta fdone
 @x      rts
 
 ; fscale  volume a (0-15) faded: a x (fadev + 1) / 16
@@ -124,7 +128,7 @@ fsid    lda $d41b               ; voice 3's oscillator and envelope, as
         sta $d41b
         lda fsv+$21
         sta $d41c
-        jsr mplay
+        jsr mplayr
         ldx #$18
 @cp     lda $d400,x
         ldy fkn,x
@@ -179,3 +183,4 @@ fadet   byte 0                  ; ticks to the next step
 fadel   byte 0                  ; ticks a step
 fport   byte 0                  ; $01 as it was
 fmark   byte $a5                ; a register not written yet
+fdone   byte 0                  ; 1: faded out (gk_exit)

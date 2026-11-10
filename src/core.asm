@@ -19,6 +19,10 @@
 ; Phases (foreground):
 ;   boot     border stripes, screen off, until a block flagged
 ;            gameready (or last, with no game)
+;            (pt_strs, -showstripes: the stripes go on through the
+;            game phase too, the border the loader's: ld_state bit 5
+;            tells the game to leave it alone, and the interrupt shows
+;            a tape error as a red border)
 ;   game     game_frame called in a loop; mainend stops the motor
 ;            and sets ld_state bit 7; the game returns carry set to
 ;            go on
@@ -39,6 +43,7 @@ pt_init word 0                  ; game entry points
 pt_frame word 0
 pt_stop word 0
 pt_step word 0                  ; progress per 256 bytes (8.8)
+pt_strs byte 0                  ; $20 = the stripes on while the game runs too
 ; (the tool also patches the exit code's operands: x_vt1, x_vt2,
 ; x_run, x_port, x_irq and x_jmp)
 
@@ -188,9 +193,7 @@ pl_pilot
         sta ld_pcount           ; in a block's data is measured again on
 @go     lda #cia_ta_run         ; the real one
         sta $dc0f               ; stopwatch from $ff7f
-@x      lda ld_sa
-        ldx ld_sx
-        rti
+@x      jmp irqx
 @nc0    cpx #3
         bcs plreset             ; class 1 or 2: noise
         lda ld_cal
@@ -226,26 +229,18 @@ plreset lda #<pl_pilot
         sta $dd04
         jmp irqx
 
-; setm  the class and vote tables for pulse set m = x + 2
+; setm  the class and vote tables for pulse set m = x + 2 (their low
+; bytes: neither table crosses a page, tools/build.py checks)
 ;   uses: a
 setm    txa
         clc
         adc #<cbase
         sta dclass+1
         sta pclass+1
-        lda #>cbase
-        adc #0
-        sta dclass+2
-        sta pclass+2
         txa
-        clc
-        adc #<pbase
+        adc #<pbase             ; (no carry: the table's page)
         sta pvote1+1
         sta pvote2+1
-        lda #>pbase
-        adc #0
-        sta pvote1+2
-        sta pvote2+2
         rts
 
 ; ---- header byte ----
@@ -268,8 +263,7 @@ b_head  ldx hidx
         bcc plreset             ; a block already loaded: skip it
         lda ld_state            ; a later one: one was missed
         ora #$40
-        sta ld_state
-        bne plreset             ; (always)
+        jmp bst
 @ok     lda hbuf
         sta bdst+1
         lda hbuf+1
@@ -345,6 +339,9 @@ bbank2  = *
         inc bdst+1
         bne @np
         inc bdst+2              ; (the game loop sees it: progress)
+cycle   = *                     ; -cycle: inc $d020 here (the tool's), the border
+        bne @np                 ; a colour on each page stored; off, a branch
+        byte $d0                ; past this byte (3 cycles: the worst path fits)
 @np     dec ld_cnt
         bne @x
         dec ld_cnt+1
@@ -366,17 +363,21 @@ b_check cmp ld_chk
         sta ld_ev
         lda ld_state
         and #$bf                ; a good block clears an error
-        sta ld_state
-        jmp plreset
+        jmp bst
 @bad    lda ld_state
         ora #$40
-        sta ld_state
-        jmp plreset
+bst     sta ld_state            ; the border the loader's (strph): a tape
+        lda strph               ; error shown, or its end
+        beq @p
+        jsr errshow
+@p      jmp plreset
 
 ; timer b value (11 - quanta) -> class, for pulse sets m = 2, 3, 4:
 ; class k is (m + 2k)h long, read for (m + 2k - 1)h to (m + 2k + 1)h.
 ; The three tables are this one from offset m - 2.
 pfrac   byte 0                  ; progress fraction
+strph   byte 1                  ; not 0: the border the loader's (the boot and
+                                ; final phases; the game's with -showstripes)
 bvec    word b_head             ; where a completed byte goes
 cbase   byte 3,3,3,3,3,2,2,1,1,0,0,0,0,0
 ; ... and the speed vote: +4 on or past a class's nominal length, -4
@@ -397,8 +398,9 @@ cinit   sei
         cld
         ldx #$ff
         txs
+        lda pt_strs             ; (bit 5: -showstripes, the border the
+        sta ld_state            ; loader's all through)
         lda #0
-        sta ld_state
         sta ld_progress
         sta ld_ev
         sta ld_seq
@@ -442,14 +444,16 @@ cinit   sei
 ; ---- boot phase: stripes until the game is in ----
         lda pt_game
         beq final
-@w0     jsr errshow
-        lda ld_ev
+@w0     lda ld_ev
         and #f_gameready+f_last
         beq @w0
+        lda pt_strs             ; the border: the game's, or (-showstripes)
+        sta strph               ; the loader's stripes on through it
+        bne @ks
         jsr stroff
         lda #0
         sta $d020
-        lda bdst+2              ; the game's own blocks move no progress:
+@ks     lda bdst+2              ; the game's own blocks move no progress:
         sta ld_pages            ; the game loop counts pages from here
         jsr g_init
 
@@ -495,15 +499,17 @@ gend    jsr g_stop
 ; ---- final phase: what the game was using, then the end ----
 final   lda #port_io
         sta $01                 ; motor on
+        sta strph               ; (the border the loader's again)
 fstr    lda #$8e
         sta stripe              ; stx: stripes on
-@w2     jsr errshow
-        lda ld_ev
+@w2     lda ld_ev
         bpl @w2                 ; f_last is bit 7
         jmp exit
 
 ; ------------------------------------------------------------
-; errshow  in a stripes phase, show a tape error as a red border
+; errshow  at each block's end, from the interrupt, while the border is
+;          the loader's (strph): a tape error as a red border, the
+;          stripes off; after a good block, on
 ;   uses: a
 ; ------------------------------------------------------------
 errshow bit ld_state
@@ -543,7 +549,7 @@ xstub   lda #$37
         sta $01
         ldx #$fb
         txs
-        jsr $ff84               ; ioinit
+        jsr s1ioi               ; ioinit, then the RESTORE lock off (stage 1's)
         ldx #$1f                ; the KERNAL vectors, by hand: RESTOR
 x_vec   lda $fd30,x             ; also writes its table back onto
         sta $0314,x             ; itself, into the ram under the

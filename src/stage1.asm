@@ -14,6 +14,12 @@
 ; pages, then an xor check byte), then jumps to it. On a bad check
 ; byte it turns the border red and waits for the block again, so
 ; rewinding a little and pressing play retries.
+;
+; RESTORE is locked out from here to the program's start: cia2's timer
+; a interrupt is enabled once and never read, so its first underflow
+; holds the NMI line low and the key can no longer make an edge on it
+; (the trick TND's Loader Game Tape Master Kit 3 used). That one NMI
+; goes to an rti; the core's exit releases the line (s1ioi).
 ; ------------------------------------------------------------
         incasm "abi.asm"
 
@@ -57,6 +63,15 @@ s1str   stx $d020               ; border stripes (slopload.py: bit, for a flat b
 ; timer b value -> 2 bits (classes 3,3,3,2,2,1,1,0,0,0,0,0)
 s1dtab  byte 3,3,3,2,2,1,1,0,0,0,0,0
 s1_pages byte 3                 ; core length in pages (set by the tool)
+
+; s1ioi  the core's exit stub calls it in place of the KERNAL's ioinit:
+; ioinit (the cias' interrupts off, their timers stopped), then $dd0d
+; read: the interrupt stage 1 left pending is gone, the NMI line free,
+; so RESTORE (and a program's own NMIs) work again. The last 7 bytes
+; before $0300: abi.asm's s1ioi, nothing loads here
+s1rel   jsr $ff84               ; (at s1ioi: tools/build.py checks)
+        bit $dd0d
+        rts
 s1lowend
 
 *=$0300
@@ -66,9 +81,15 @@ s1lowend
 *=$0351
 s1      sei
         cld
+        lda #<s1rti             ; an nmi (through the KERNAL's $0318) to an rti
+        sta $0318
+        lda #>s1rti
+        sta $0319
         lda #$7f
         sta $dc0d               ; no cia interrupts
         sta $dd0d
+        lda #$81                ; but cia2's timer a: its first underflow
+        sta $dd0d               ; holds the nmi line low (RESTORE locked out)
         lda #$0b
         sta $d011               ; screen off: no bad lines, no jitter
 s1bc    lda #0                  ; the border (slopload.py: a flat border's colour)
@@ -92,9 +113,8 @@ s1again lda #>core
 ; ---- find a pilot, measure it, wait for the sync pulse ----
 s1sync  lda #h_def-1
         sta $dd04               ; wide window until measured
-        lda #0
-        sta ld_cal
-        tay                     ; y = pilot pulses so far
+        ldy #0                  ; y = pilot pulses so far
+        sty ld_cal
 @p      jsr s1getp
         cpx #7
         bcc @nc0                ; not class 0
@@ -107,10 +127,9 @@ s1sync  lda #h_def-1
         sta $dc0f               ; stopwatch from $ffff
 @n1     cpy #cal_end
         bne @p
-        lda $dc07               ; 128 pulses of 4h = 512h cycles:
-        eor #$ff                ; a = elapsed / 256 = 2h (rounded up)
-        sec
-        sbc #1
+        lda #$fe                ; 128 pulses of 4h = 512h cycles:
+        sec                     ; ($ff - hi) = elapsed / 256 = 2h (rounded
+        sbc $dc07               ; up), less 1
         lsr a                   ; h-1: the latch for a period of h
         sta $dd04
         sta ld_cal              ; non-zero: measured
@@ -135,10 +154,10 @@ s1dst   = *
         bne @ld
         jsr s1getb
         cmp ld_chk
-        bne s1bad
-        jmp core
+        beq core
 s1bad   lda #2                  ; red: rewind a little, press play
         sta $d020
         bne s1again             ; (always)
+s1rti   rti                     ; (the nmi that locks RESTORE out)
 
 s1left  byte 3                  ; pages still to load

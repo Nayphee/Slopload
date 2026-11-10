@@ -260,23 +260,41 @@ def songs_of(t, song):
     return [song] if song else list(range(1, max(1, t['songs']) + 1))
 
 
-def trace(t, song=None, frames=FRAMES):
+PLAYER_FLAGS = (0x01, 0x80, 0x81)        # SlopLoad's player: voice 3 handed over, NTSC, both
+PLAYER_FRAMES = 300
+
+
+def trace(t, song=None, frames=FRAMES, player=False):
     """the bytes to move (tune addresses), the workspace, and each song's
     SID log, over the songs to keep (and code the run didn't reach:
-    static_marks)"""
+    static_marks). player: a tune in SlopLoad's own player (sidstrip's
+    slp_player): its other ways are run too, as a module runs them (its
+    flags byte, +9, at each of PLAYER_FLAGS, then its stop, +6, and a play
+    after it), for what only they use; their sound isn't compared"""
     if t['rsid'] or not t['play']:
         raise Unmovable("an RSID tune, or one with no play routine: it can't be run here")
     marks, ws, logs, code, cmps = set(), set(), {}, set(), {}
-    for sg in songs_of(t, song):
-        s = play_run(TraceSim(t), t, sg, frames)
+
+    def take(s):
+        nonlocal marks, code, ws
         marks |= s.marks
         cmps.update(s.cmps)
         code |= s.code
         ws |= {a for a in s.writes if 0x200 <= a < 0xd000 or a >= 0xe000}
-        logs[sg] = s.sid_log
         outside = [a for a in s.outside if a not in s.writes]
         if outside:
             raise Unmovable(f"it runs code outside itself (${outside[0]:04X}: a ROM)")
+    for sg in songs_of(t, song):
+        s = play_run(TraceSim(t), t, sg, frames)
+        take(s)
+        logs[sg] = s.sid_log
+    for fl in (PLAYER_FLAGS if player else ()):
+        tf = dict(t, data=t['data'][:9] + bytes([fl]) + t['data'][10:])
+        for sg in songs_of(t, song):
+            s = play_run(TraceSim(tf), tf, sg, PLAYER_FRAMES)
+            s.call(t['load'] + 6, limit=200_000)        # stop
+            s.call(t['play'], limit=200_000)            # (then play does nothing)
+            take(s)
     marks |= static_marks(t, code)[0]
     marks |= cmp_marks(t, cmps, marks)
     return marks, sorted(ws), logs

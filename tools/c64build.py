@@ -23,6 +23,7 @@ import c64model as M  # noqa: E402
 import slopload as S  # noqa: E402
 import taplib as T  # noqa: E402
 import build as B  # noqa: E402
+import c64words as W  # noqa: E402
 
 BUILD = os.path.join(ROOT, 'build')
 C64 = os.path.join(ROOT, 'c64')
@@ -30,10 +31,14 @@ C1541 = os.environ.get('VICE_C1541', os.path.expanduser('~/Documents/vice-3.10/b
 # the demo files on SlopLoad 64's disk: (source, name on the disk)
 DEMOS = [(os.path.join(BUILD, 'modules', 'flappy.lm'), 'flappy-load.lm'),
          (os.path.join(BUILD, 'modules', 'crossy.lm'), 'crossy-load.lm'),
+         (os.path.join(BUILD, 'modules', 'squeeze.lm'), 'squeeze-load.lm'),
+         (os.path.join(BUILD, 'modules', 'rubble.lm'), 'rubble-load.lm'),
+         (os.path.join(BUILD, 'modules', 'bounce.lm'), 'bounce-load.lm'),
          (os.path.join(BUILD, 'modules', 'ozgold.lm'), 'ozgold.lm'),
          (os.path.join(BUILD, 'modules', 'petscii.lm'), 'petscii.lm'),
          (os.path.join(ROOT, 'modules', 'petscii', 'demo.pet'), 'demo.pet'),
          (os.path.join(ROOT, 'pictures', 'slopload.koa'), 'slopload.koa'),
+         (os.path.join(ROOT, 'pictures', 'cassette.spr'), 'cassette.spr'),     # (a loading sprite: PICTURE-LM's 2)
          (os.path.join(ROOT, 'music', 'build', 'slopload.sid'), 'slopload.sid'),
          (os.path.join(ROOT, 'music', 'build', 'enigma.sid'), 'enigma.sid'),
          (os.path.join(ROOT, 'music', 'build', 'ozgold.sid'), 'ozgold.sid'),
@@ -47,15 +52,18 @@ DEMO_SLM = ('slopload', 'enigma', 'ozgold')
 
 def demo_slm():
     """build/<tune>.slm from music/build/<tune>.sid, by tools/sidstrip.py
-    (half a minute each: made again only when the .sid changes, its
-    SHA-256 kept beside it)"""
+    (half a minute each: made again only when the .sid or the tools that
+    strip it change, their SHA-256 kept beside it)"""
     import hashlib
     import sidstrip as SS
     for t in DEMO_SLM:
         sid = os.path.join(ROOT, 'music', 'build', t + '.sid')
         slm = os.path.join(BUILD, t + '.slm')
         tag = slm + '.sha256'
-        sha = hashlib.sha256(open(sid, 'rb').read()).hexdigest()
+        h = hashlib.sha256(open(sid, 'rb').read())
+        for src in ('sidstrip.py', 'sidfile.py', 'sidreloc.py'):
+            h.update(open(os.path.join(HERE, src), 'rb').read())
+        sha = h.hexdigest()
         if os.path.exists(slm) and os.path.exists(tag) and open(tag).read().strip() == sha:
             continue
         SS.write_slm(slm, SS.strip(sid))
@@ -77,12 +85,13 @@ def lohi(name, vals):
 
 
 def version():
-    """the release (VERSION): on the disks' name, 16 characters at most"""
+    """the release (VERSION): on the disks' name ("slopload 0.10.0"), 16
+    characters at most"""
     try:
         v = open(os.path.join(ROOT, 'VERSION')).read().strip()
     except OSError:
         v = 'dev'
-    assert len('slopload64 ' + v) <= 16, v
+    assert len('slopload ' + v) <= 16, v
     return v
 
 
@@ -93,7 +102,7 @@ def payload():
     pages = (len(core) + 255) // 256
     assert pages == 4, pages
     for lab, at in (('pt_game', 0), ('pt_auto', 0), ('pt_init', 0), ('pt_frame', 0), ('pt_stop', 0),
-                    ('pt_step', 0), ('x_run', 1), ('x_jmp', 1), ('x_port', 1), ('x_irq', 0),
+                    ('pt_step', 0), ('pt_strs', 0), ('x_run', 1), ('x_jmp', 1), ('x_port', 1), ('x_irq', 0),
                     ('x_vt1', 1), ('x_vt2', 1)):
         out.append(f"c{lab} = {cs[lab] - 0x400 + at}")
     ss = S.sym('stage1')
@@ -101,14 +110,16 @@ def payload():
     hpart = open(os.path.join(BUILD, 'stage1_header.bin'), 'rb').read()
     out += [f"s1lo = ${ss['s1lo']:04x}", f"s1pages = {ss['s1_pages'] - ss['s1lo']}",
             f"s1blklen = {len(blk)}", f"s1hdrlen = {len(hpart)}", f"corelen = {len(core)}", ""]
-    rom_total = (27136 + 2 * (20 * 202 + 4) + 77 + 77 + 5376 + 2 * (20 * 68 + 4) + 77 + 76)
-    rom_check = len(T.rom_file(bytes(192), bytes(58)))
+    rom_total = (27136 + 2 * (20 * 202 + 4) + 77 + 77 + 5376 + 2 * (20 * (len(blk) + 10) + 4) + 77 + 76)
+    rom_check = len(T.rom_file(bytes(192), bytes(len(blk))))
     assert rom_total == rom_check, (rom_total, rom_check)
     out += [f"romtotal = {rom_total}", ""]
     # the show module (pictures and music, no other module): its bytes at
     # SHOW_BASE and the offsets of its address high bytes, to move it
     sm = M.show_module()
     out += asm_bytes("pl_show", sm['data'])
+    assert len(sm['data']) <= 0xc100 - 0xb000, "the show module outgrows SlopLoad 64's showtmp ($b000-$c0ff)"
+    assert len(sm['relocs']) <= 255, "the show module has more relocations than prshow's loop takes"
     out += [f"showlen = {len(sm['data'])}", f"showclaim = {sm['claim']}", f"showbase = ${M.SHOW_BASE:04x}",
             f"nshowrel = {len(sm['relocs'])}"]
     out += lohi("showrel", sm['relocs'])
@@ -127,6 +138,17 @@ def payload():
     st, c2data = stripes_patch(cs)
     out += st
     out += flat_patch(cs)
+    out += fx_patch(cs)
+    # a chain's switch (src/chain.asm, slopload.py -then): assembled with no
+    # addresses; SlopLoad 64 writes the modules' and the step into its 12
+    # bytes at swvec, and puts it on tape as the first module's last part
+    sw = S.chain_shim(dict(frame=0, stop=0), dict(init=0, frame=0, stop=0), 0, cs)
+    cl = S.sym('chain_placed')
+    assert sw['data'][cl['cafr'] - sw['addr']:] == bytes(12) and cl['cpst'] == cl['cafr'] + 10
+    out += ["", "; a chain's switch (src/chain.asm): its 12 bytes at swvec filled in",
+            f"chainat = ${sw['addr']:04x}", f"swlen = {len(sw['data'])}", f"swvec = {cl['cafr'] - sw['addr']}",
+            f"swframe = ${sw['cframe']:04x}", f"swstop = ${sw['cstop']:04x}"]
+    out += asm_bytes("pl_sw", sw['data'])
     out += ["", "; stage 1's data block, its header part, the core"]
     out += asm_bytes("pl_s1blk", blk) + asm_bytes("pl_s1hdr", hpart) + asm_bytes("pl_core", core)
     out += ["", "; core_stripes' patch: copied to c2ins at the start (after the core,",
@@ -164,7 +186,7 @@ def stripes_patch(cs):
     diffs = [(i, (b[i] - a[src(i)]) & 255) for i in range(len(b)) if src(i) is not None and a[src(i)] != b[i]]
     fields = {(sb[f] - 0x400 + at + k) for f, at, n in
               (('pt_game', 0, 1), ('pt_auto', 0, 1), ('pt_init', 0, 2), ('pt_frame', 0, 2), ('pt_stop', 0, 2),
-               ('pt_step', 0, 2), ('x_run', 1, 1), ('x_jmp', 1, 2), ('x_port', 1, 1), ('x_irq', 0, 1),
+               ('pt_step', 0, 2), ('pt_strs', 0, 1), ('x_run', 1, 1), ('x_jmp', 1, 2), ('x_port', 1, 1), ('x_irq', 0, 1),
                ('x_vt1', 1, 1), ('x_vt2', 1, 1)) for k in range(n)}
     assert not fields & {i for i, _ in diffs}, "core_stripes: a patched field moves by a delta"
     # one byte each: the gap from the last (6 bits) and the delta's code
@@ -202,17 +224,22 @@ def stripes_patch(cs):
            f"stclo = ${stab_at:04x}                   ; (the styles' colour lists' addresses)",
            f"stchi = ${stab_at + len(names):04x}"]
     # the styles with no stripes after the table's (core_flat): black (the
-    # table's last, one colour), then a colour a block, and one colour asked
+    # table's last, one colour), then a colour a block, one colour (your
+    # own, of one), an effect, and your own colours (a list in ownl)
     assert names[-1] == 'black' and S.stripe_mode('black') == ('flat', 0)
     assert all(S.stripe_mode(n)[0] == 'table' for n in names[1:-1])
-    allnames = names + ['block', 'one colour']
+    # the palettes on SlopLoad 64's colours line (stn: their names): the
+    # styles, then your own
+    pals = names + ['your own']
     out += [f"nstyles = {len(names)}                    ; (with a colour list: rainbow to black)",
             f"st_black = {len(names) - 1}", f"st_block = {len(names)}", f"st_one = {len(names) + 1}",
-            f"nmodes = {len(allnames)}"]
-    for k, n in enumerate(allnames):
+            f"st_fx = {len(names) + 2}                     ; (an effect: opt_fx, core_fx)",
+            f"st_own = {len(names) + 3}                    ; (your own colours: ownl)",
+            f"npal = {len(pals)}                       ; (the palettes: the styles, your own)"]
+    for k, n in enumerate(pals):
         out.append(f"stn{k} text \"{n}\",0")
-    out.append("stnlo byte " + ','.join(f"<stn{k}" for k in range(len(allnames))))
-    out.append("stnhi byte " + ','.join(f">stn{k}" for k in range(len(allnames))))
+    out.append("stnlo byte " + ','.join(f"<stn{k}" for k in range(len(pals))))
+    out.append("stnhi byte " + ','.join(f">stn{k}" for k in range(len(pals))))
     return out, data
 
 
@@ -228,7 +255,7 @@ def flat_patch(cs):
     diff = [(i, a[i] ^ b[i]) for i in range(len(b)) if a[i] != b[i]]
     fields = {(cs[f] - 0x400 + at + k) for f, at, n in
               (('pt_game', 0, 1), ('pt_auto', 0, 1), ('pt_init', 0, 2), ('pt_frame', 0, 2), ('pt_stop', 0, 2),
-               ('pt_step', 0, 2), ('x_run', 1, 1), ('x_jmp', 1, 2), ('x_port', 1, 1), ('x_irq', 0, 1),
+               ('pt_step', 0, 2), ('pt_strs', 0, 1), ('x_run', 1, 1), ('x_jmp', 1, 2), ('x_port', 1, 1), ('x_irq', 0, 1),
                ('x_vt1', 1, 1), ('x_vt2', 1, 1)) for k in range(n)}
     assert not fields & {i for i, _ in diff}, "core_flat: a patched field is one it changes"
     assert len(b) <= 1024 and len(diff) < 256
@@ -242,9 +269,95 @@ def flat_patch(cs):
             + asm_bytes('fxr', [x for _, x in diff]))
 
 
+FX_FIELDS = (('pt_game', 0, 1), ('pt_auto', 0, 1), ('pt_init', 0, 2), ('pt_frame', 0, 2), ('pt_stop', 0, 2),
+             ('pt_step', 0, 2), ('pt_strs', 0, 1), ('x_run', 1, 1), ('x_jmp', 1, 2), ('x_port', 1, 1),
+             ('x_irq', 0, 1), ('x_vt1', 1, 1), ('x_vt2', 1, 1))
+
+
+def fx_patch(cs):
+    """core_fx (the loading line effects, slopload.py -stripes classic,
+    thin, mixed, and:N, ora:N, eor:N) from the core, in place: its bytes
+    from the effect's 4th on moved up 5 (the effect grows from stx's 3 to
+    8), then the bytes that differ from that, as (gap, xor) pairs: the
+    same list after the move makes core_fx, and before moving back makes
+    the core again (plan.asm corefx, corefxd). Then where each setting
+    goes: the effect's 8 bytes, its colour, its stores' opcodes on and
+    off and their places; and the effects' names and costs."""
+    a = open(os.path.join(BUILD, 'core.bin'), 'rb').read()
+    b = open(os.path.join(BUILD, 'core_fx.bin'), 'rb').read()
+    sf = S.sym('core_fx')
+    p1 = cs['stripe'] - 0x400
+    assert sf['stripe'] - 0x400 == p1
+    moved = a[:p1 + 3] + bytes(5) + a[p1 + 3:]
+    assert len(b) >= len(moved) and len(b) <= 1024, (len(a), len(b))
+    moved += bytes(len(b) - len(moved))
+    diff = [(i, moved[i] ^ b[i]) for i in range(len(b)) if moved[i] != b[i]]
+    fields = {(sf[f] - 0x400 + at + k) for f, at, n in FX_FIELDS for k in range(n)}
+    assert not fields & {i for i, _ in diff}, "core_fx: a patched field is one it changes"
+    for f, at, n in FX_FIELDS:                  # (the fields where the move takes them)
+        o = cs[f] - 0x400 + at
+        assert sf[f] - 0x400 + at == (o if o < p1 + 3 else o + 5), f
+    packed, last = [], 0
+    for i, x in diff:
+        g = i - last
+        while g > 255:
+            packed += [255, 0]
+            g -= 255
+        packed += [g, x]
+        last = i
+    out = ["", "; core_fx from the core (tools/c64build.py fx_patch): from cfxp + 3 moved up 5,",
+           "; then (gap, xor) pairs; where each setting goes",
+           f"cfxp = {p1}", f"cfxlen = {len(b)}", f"nfx2 = {len(packed)}"]
+    for lab in ('fxbc', 'fxa1', 'fxb1', 'fxa0', 'fxb0', 'fxs', 'fxs2'):
+        out.append(f"c{lab} = {sf[lab] + 1 - 0x400}")
+    out.append(f"cfxcyc = {sf['cycle'] - 0x400}             ; -cycle: inc $d020 here (3 bytes)")
+    out += asm_bytes('fxd', packed)
+    # the effects, in SlopLoad 64's list after the styles (stn: their
+    # names, nfxn: how many; each one's place in slopload.py's FX)
+    names = list(S.FX)
+    fxs = [S.stripe_fx(n + (':0' if n in S.FX_VALUE else '')) for n in names]
+    assert all(f['code'][4] == 0 for f in fxs if f['name'] in S.FX_VALUE)    # (the value: byte 4)
+    # after them (not listed): the plain one, one colour with -cycle
+    fxs.append(S.plain_fx(0))
+    out += [f"nfxs = {len(names)}", f"fxplain = {len(names)}             ; (one colour, -cycle: no lines)",
+            f"cfxslo = {(0x400 + p1) & 255}             ; (the effect's first byte's low byte)"]
+    out += asm_bytes('fxcost', [S.FX[n] for n in names] + [0])
+    out += asm_bytes('fxval', [1 if n in S.FX_VALUE else 0 for n in names] + [0])
+    out += asm_bytes('fxtpl', [b for f in fxs for b in f['code']])      # (8 a piece)
+    out += asm_bytes('fxpa', [f['pa'] for f in fxs]) + asm_bytes('fxpb', [f['pb'] for f in fxs])
+    out += asm_bytes('fxa1v', [f['a'][0] for f in fxs]) + asm_bytes('fxb1v', [f['b'][0] for f in fxs])
+    out += asm_bytes('fxa0v', [f['a'][1] for f in fxs]) + asm_bytes('fxb0v', [f['b'][1] for f in fxs])
+    # SlopLoad 64's effect line (effn: their names): standard (the
+    # colours as stripes), the effects, then a colour a block
+    effs = ['standard'] + names + ['block']
+    out.append(f"neff = {len(effs)}")
+    for k, n in enumerate(effs):
+        out.append(f"effn{k} text \"{n}\",0")
+    out.append("effnlo byte " + ','.join(f"<effn{k}" for k in range(len(effs))))
+    out.append("effnhi byte " + ','.join(f">effn{k}" for k in range(len(effs))))
+    return out
+
+
+def words():
+    """c64/words.asm for SlopLoad 64's messages (tools/c64words.py): the
+    pieces chosen from its texts; returns them"""
+    wpath = os.path.join(C64, 'words.asm')
+    if not os.path.exists(wpath):
+        open(wpath, 'w').write(W.words_asm([]))         # (none yet: the texts don't depend on it)
+    lines = B.expand(os.path.join(C64, 'slopload64.asm')).split('\n')
+    texts, ok = W.analyse(lines)
+    ws = W.choose(W.strings(lines, texts, ok))
+    text = W.words_asm(ws)
+    if not os.path.exists(wpath) or open(wpath).read() != text:
+        open(wpath, 'w').write(text)
+    return ws
+
+
 def main():
     payload()
-    org, data, labs = B.assemble(os.path.join(C64, 'slopload64.asm'), 'slopload64', {})
+    ws = words()
+    org, data, labs = B.assemble(os.path.join(C64, 'slopload64.asm'), 'slopload64', {},
+                                 transform=lambda s: W.pack(s, ws))
     assert org == 0x0801, hex(org)
     prg = os.path.join(BUILD, 'slopload64.prg')
     open(prg, 'wb').write(bytes([1, 8]) + bytes(data))
@@ -253,6 +366,8 @@ def main():
           f" the music pool to ${labs['mpoolend'] - 1:04X}")
     if labs['mpoolend'] > 0xa000:
         raise SystemExit(f"slopload64: the music pool runs past $9fff (by {labs['mpoolend'] - 0xa000} bytes)")
+    assert labs['bhdr'] - labs['bsave'] == labs['gorig'] + 9 - labs['gnp'], "chain.asm: bsave isn't gnp-gorig's size"
+    print(f"            {0x8f00 - labs['bssend']} bytes to spare before the music pool moves past $9fff")
     # the TAP writer (a .tap to a cassette, with an REU)
     org, data, labs = B.assemble(os.path.join(C64, 'tapwriter.asm'), 'tapwriter', {})
     assert org == 0x0801, hex(org)
@@ -285,6 +400,15 @@ def main():
            f"msgmax = 200                   ; (the PC tool's: {PS.MSG_MAX})"]
     out += asm_bytes('lmmain', main_[:code], 20)
     out += asm_bytes('lmscr', low, 20)
+    # the same built at $a000 for a chain (tools/build.py's petscii_chain.prg):
+    # the bytes they differ in, each an address's high byte $40 less
+    ch = open(os.path.join(BUILD, 'modules', 'petscii_chain.prg'), 'rb').read()
+    assert ch[0] | ch[1] << 8 == ma - 0x4000 and len(ch) - 2 == ml
+    rel = [i for i in range(code) if ch[2 + i] != main_[i]]
+    assert all(main_[i] ^ ch[2 + i] == 0x40 for i in rel) and 11 in rel and len(rel) <= 255
+    assert ch[2 + code:] == main_[code:], "petscii_chain.prg: its message differs"
+    out += ["", "; built at $a000 for a chain: the bytes that differ (eor $40)", f"lmnrel = {len(rel)}"]
+    out += asm_bytes('lmrlo', [i & 255 for i in rel], 20) + asm_bytes('lmrhi', [i >> 8 for i in rel], 20)
     open(os.path.join(C64, 'petlm.asm'), 'w').write("\n".join(out) + "\n")
     org, data, labs = B.assemble(os.path.join(C64, 'petsciilm.asm'), 'petsciilm', {})
     assert org == 0x0801, hex(org)
@@ -305,17 +429,58 @@ def main():
     open(ss, 'wb').write(bytes([1, 8]) + bytes(data))
     print(f"sid-slm     ${org:04X}-${org + len(data) - 1:04X}  {len(data)} bytes; music pool"
           f" ${labs['mpool']:04X}, the file ${stage:04X}-$9FFF ({0xa000 - stage} bytes)")
+    # PICTURE-LM (a picture, its sprites and its ending to a show module
+    # .lm), with the show module assembled at $c000 in it
+    import picturelm as PL
+    mdata, mlabs = PL.module_at(PL.LM_BASE)
+    out = ["; generated by tools/c64build.py from modules/show/show.asm - do not edit",
+           "; the show module at $c000, as tools/picturelm.py puts it in a .lm:",
+           "; PICTURE-LM patches its header and writes it, then the picture",
+           f"lmlen = {len(mdata)}                 ; its bytes",
+           f"lmclaim = ${mlabs['modend']:04x}              ; the end of what it claims (its scratch after them)"]
+    out += asm_bytes('pl_lm', mdata, 20)
+    # the picture formats (picturelm.py's FORMATS): lengths, load address
+    # (0 any, $ff a bitmap's, else its high byte), kind (bit 0 hires, bit 1
+    # one colour for all), and where the bitmap, screen, colours and the
+    # background are ($ffff: none)
+    fm = PL.FORMATS
+    la = lambda l: 0 if l is None else 0xff if l == 'bm' else 0xfe if l == 'dd' else l >> 8
+    off = lambda v: 0xffff if v is None else abs(v)
+    out += [f"nfmt = {len(fm)}"]
+    for lab, vals in (('fmll', [f[1][0] & 255 for f in fm]), ('fmlh', [f[1][0] >> 8 for f in fm]),
+                      ('fmhl', [f[1][1] & 255 for f in fm]), ('fmhh', [f[1][1] >> 8 for f in fm]),
+                      ('fmla', [la(f[2]) for f in fm]),
+                      ('fmk', [(1 if f[3] else 0) | (2 if f[6] is not None and f[6] < 0 else 0) for f in fm]),
+                      ('fmbl', [f[4] & 255 for f in fm]), ('fmbh', [f[4] >> 8 for f in fm]),
+                      ('fmsl', [f[5] & 255 for f in fm]), ('fmsh', [f[5] >> 8 for f in fm]),
+                      ('fmcl', [off(f[6]) & 255 for f in fm]), ('fmch', [off(f[6]) >> 8 for f in fm]),
+                      ('fmgl', [off(f[7]) & 255 for f in fm]), ('fmgh', [off(f[7]) >> 8 for f in fm])):
+        out += asm_bytes(lab, vals)
+    assert all(f[2] in (None, 'bm', 'dd') or f[2] & 255 == 0 for f in fm)     # (on a page's start)
+    assert PL.DD_LOADS == (0x1c00, 0x5c00) and PL.BM_LOADS == (0x2000, 0x4000, 0x6000, 0xa000, 0xe000)
+    for k, f in enumerate(fm):
+        out.append(f"fmn{k} text \"{f[0]}\",0")
+    out.append("fmnlo byte " + ','.join(f"<fmn{k}" for k in range(len(fm))))
+    out.append("fmnhi byte " + ','.join(f">fmn{k}" for k in range(len(fm))))
+    open(os.path.join(C64, 'piclm.asm'), 'w').write("\n".join(out) + "\n")
+    org, data, labs = B.assemble(os.path.join(C64, 'picturelm.asm'), 'picturelm', {})
+    assert org == 0x0801, hex(org)
+    if labs['bssend'] > labs['zeros']:
+        raise SystemExit(f"picture-lm: runs to ${labs['bssend'] - 1:04X}, into its zeros at ${labs['zeros']:04X}")
+    pm = os.path.join(BUILD, 'picture-lm.prg')
+    open(pm, 'wb').write(bytes([1, 8]) + bytes(data))
+    print(f"picture-lm  ${org:04X}-${org + len(data) - 1:04X}  {len(data)} bytes")
     demo_slm()
     for img, kind in (('slopload64.d64', 'd64'), ('slopload64.d81', 'd81')):
         path = os.path.join(BUILD, img)
         if os.path.exists(path):
             os.remove(path)
-        cmd = [C1541, '-format', f'slopload64 {version()},sl', kind, path, '-write', prg, 'slopload64', '-write', tw, 'tapwriter',
-               '-write', pl, 'petscii-lm', '-write', ss, 'sid-slm']
+        cmd = [C1541, '-format', f'slopload {version()},sl', kind, path, '-write', prg, 'slopload64', '-write', tw, 'tapwriter',
+               '-write', pl, 'petscii-lm', '-write', ss, 'sid-slm', '-write', pm, 'picture-lm']
         for src, name in DEMOS:
             cmd += ['-write', src, name]
         subprocess.run(cmd, check=True, capture_output=True)
-    print("  build/slopload64.d64, build/slopload64.d81 (with tapwriter, petscii-lm, sid-slm, "
+    print("  build/slopload64.d64, build/slopload64.d81 (with tapwriter, petscii-lm, sid-slm, picture-lm, "
           + ', '.join(n for _, n in DEMOS) + ")")
 
 
