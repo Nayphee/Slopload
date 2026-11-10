@@ -150,10 +150,21 @@ the core and compares with the tape:
 | Crossy-Load, scrolling all the time (speed 0; speed 13) | ±50; ±48 | 52; 50 |
 | Template-Load | ±48 | 51 |
 | a Koala picture (the show module) | ±49 | 81 |
+| a Koala picture, speed 0 (measured again, 2026-11-06) | ±49 | 51 |
+| ... with one sprite on its lines | ±54 | 59 |
+| ... one twice as tall | ±55 | 60 |
+| ... two side by side | ±59 | 64 |
+| ... three side by side | ±62 | 68 |
+| ... four side by side | ±67 | 73 |
+| ... eight, twice as tall | ±97 | 118 |
 | music alone, screen off (the show module) | ±6 | 8 (and a few edges at block starts, as with the screen off) |
 
-So modules use no sprites (Invade-a-Load has none either), and a
-module states its jitter in its header (byte 12; all three say 48). The
+So modules used no sprites at first (Invade-a-Load has none either),
+and a module states its jitter in its header (byte 12; all three say
+48). Since 2026-11-06 a module may have up to two sprites on a line,
+counted in its jitter (8 cycles for one, 16 for two: the loader's pilot
+window takes 64 in all); the show module's loading sprites (`-sprite`)
+are the first. The
 games' rows were measured again after the core's stopwatch changed (it
 counts from $FF7F now: `tests/jitter.py` finds where it restarts and
 wraps, and leaves out the record that spans a restart). An earlier
@@ -296,11 +307,11 @@ mode's colour (a style's first) for every mode but rainbow: its
 | $04-$0F | loader |
 | $10-$8F | module (the music player uses $70-$7F) |
 | $0200-$0258 | free for the module: the BASIC input buffer, which the program's start never reads (Crossy-Load keeps a buffer, two tables and four variables at $0200-$0254) |
-| $0259-$02C9 | KERNAL variables, kept for the program's start |
-| $02CA-$03EB | stage 1 (only until the core runs) |
+| $0259-$02C2 | KERNAL variables, kept for the program's start |
+| $02C3-$03FA | stage 1 (only until the core runs), but for its last 7 bytes, $02F9-$02FF: the exit's ioinit and RESTORE release (`s1ioi`), kept to the end |
 | $0334-$0370 | exit code (copied there at the end) |
 | $0400-$07EF | core (in the default screen's memory; the module shows its own) |
-| module's claim | Flappy-Load $E000-$FBFF, Crossy-Load $CAEA-$CFFE and $E000-$FFF9, the built-in music $C000-$C9C8 |
+| module's claim | Flappy-Load $E000-$FBFF, Crossy-Load $CAEA-$CFFE and $E000-$FFF9, a tune in SlopLoad's player at $C000 (the demos: to $CA87) |
 | $FFFA-$FFFF | interrupt vectors in RAM |
 
 The program can use $0801-$FFF9: 250 disk blocks of 254 bytes. Bytes
@@ -309,6 +320,18 @@ module has stopped. The motor is stopped while the player finishes; the
 blocks after the stop have a 2-second pilot for the deck to get back up
 to speed. A CD or MP3 player can't be stopped: `-nomotor` ends the
 module as soon as the rest has loaded instead.
+
+RESTORE is locked out from stage 1 to the program's start: stage 1
+points the KERNAL's NMI vector ($0318) at an `rti` and enables cia2's
+timer A interrupt, which it never reads; the timer runs from the first
+edge (the quantum timer), so its first underflow pulls the NMI line low
+and leaves it there. The 6510's NMI is edge-triggered, and the RESTORE
+key shares that line, so a press makes no edge: no NMI can delay the
+tape's interrupt. The exit stub calls `s1ioi` in place of the KERNAL's
+ioinit: ioinit (the masks off, the timers stopped), then a read of
+$DD0D, which clears the pending interrupt and frees the line for the
+program. (TND's Loader Game Tape Master Kit 3 locked RESTORE out the
+same way, with no release.)
 
 ## 8. Module interface
 
@@ -335,6 +358,11 @@ A module is a PRG with this header at its load address:
 +25           (byte) the show module: the picture's VIC bank ($DD00 bits)
 +26 blocks    (byte) set by the tool for a module: the program's size in disk
                       blocks (OZ GOLD counts them down)
++27 keeps     (byte) the module's: bit 0 the border to the loader (-showstripes),
+                      1 effects on voice 3, 2 -wait, 3 -countdown
++28 options   (byte) set by the tool: bit 1 -wait (SPACE alone starts the
+                      program), bit 3 -countdown (the status line counts
+                      blocks); the show module: bit 0 -fade, 2 hires too
 ```
 
 A module that plays music calls play once a tick (the other modules) or
@@ -362,6 +390,19 @@ start key, fire, music), when the program starts, the debug hooks, the
 memory a module may use (including a second part), and the tests a
 module passes. Flappy-Load, Crossy-Load, the minimal Template-Load,
 OZ GOLD and PETSCII-Load all keep it.
+
+**The end: the music fades, in every module.** A game asks to end
+through the kit (`startkey` at the load's end, `gk_done` at game over);
+its frame's last call is `gk_exit`, which with music playing turns that
+into the fade (`gk_fade` 1: the kit's `mplay` plays `fadekit.asm`'s
+tick, which calls the tune's own play routine, `mplayr`) and returns
+the carry set only when the fade is done (`fdone`), so the game plays
+on for its 2.6 seconds. The loading screens drove the same fade
+themselves and still do; the show module too. Each module includes
+`fadekit.asm` where it has room, about 300 bytes and 84 of scratch:
+Flappy-Load and Bounce-Load had none beside their code, so the fade is a
+second part at $CE80 (below the module, past SlopLoad's player at
+$C000), and Crossy-Load's low part starts $19B lower.
 
 ### Crossy-Load's frame
 
@@ -623,8 +664,8 @@ as the lanes say.
 
 ### The show module
 
-`modules/show/` covers the modes with no other module (`-show picture`,
-`picmusic`, `music`): 208 bytes at $CA00, with the tool filling in the
+`modules/show/` covers the shows with no module file of their own (a
+picture given as `-module`, with music or without, and a tune alone): 208 bytes at $CA00, with the tool filling in the
 song (byte 13) and the picture's background colour (byte 15, $FF for
 none). A Koala picture is three parts loaded before it starts, with the
 screen off: the screen to $CC00, the bitmap to $E000 and the colours
@@ -640,6 +681,139 @@ module: the jitter in byte 12 (48) is added to the margin and the
 shortest pulse is 208 cycles. Music alone keeps the screen off:
 screen-off speeds, with the CPU share in byte 14 (85%) leaving the music
 its time.
+
+Since 2026-11-06 it has grown (about 1.6 KB, 1.7 claimed with the fade's
+scratch), with features borrowed from Tape Master Pro, each a header
+byte the tool sets:
+
+- **+28, the ending and hires.** Bit 2: a hires picture ($D016 $08, no
+  colour RAM part). Bit 1 (`-wait`): once loaded, `prompt` draws PRESS
+  SPACE OR FIRE across row 24: the row's 320 bitmap bytes cleared, each
+  letter's eight bytes read from the character ROM ($01 with I/O and the
+  ROMs out but the character ROM, interrupts off: the tape is stopped)
+  and each pixel doubled (a multicolour pair 11 is colour RAM's colour),
+  starting at line 251 so the row changes whole (it takes about 220
+  lines: done by line 160 of the next frame on PAL, 206 on NTSC, before
+  row 24's 243); then a fresh press of SPACE or fire on port 2
+  (`kheld`, `kup`: one held before the prompt doesn't count; `kdbg` for
+  tests). Bit 0 (`-fade`): `tick` calls the kit's `fade` instead of the
+  play routine, after the key if there is one, and `ending` returns
+  carry only when it has set `exitreq`.
+- **+29 to +75, the loading sprites.** $D015, positions, $D010,
+  multicolour, expansion, $D025/$D026, the lines they cover, and a flash
+  table (up to 32 colours, frames a step), all as the tool works them
+  out; their bytes at the picture's bank + $3F40 (pointers $FD, $FE: the
+  192 bytes after the bitmap, free in every bank). `sprchk`, called from
+  the waits for a line or a frame, counts frames and writes the next
+  colour only when the beam is outside the sprites' lines, and never
+  when there is one colour (a store to a colour register each frame makes
+  the 8565's grey dots).
+- **+76, colours to copy.** A module file (PICTURE-LM's, `tools/
+  picturelm.py`'s) can't load a part into colour RAM: its parts load
+  into RAM. So the Koala picture's colours sit in the module's memory
+  and `colcopy` puts them into colour RAM before the screen goes on.
+
+The core's `-cycle` is the core's, not the module's: three bytes at
+`cycle` in `b_data`, on the page crossing (the interrupt's worst path),
+`BNE` past themselves when off (3 cycles: 167 of the 168 the shortest
+pulse allows) and `INC $D020` when on (the tool adds 3 cycles to the
+shortest pulse). It runs whatever the phase, so with a module or show it
+needs the border to be the loader's all through (`-showstripes`).
+
+### Chains: two modules on one tape
+
+`-module A -then B` (2026-11-06): A runs while B's parts load, then B
+while the program loads. The user's case was a PETSCII screen with a
+scroller and counter while a picture loads, then the picture. The
+loader core didn't change; the core has 2 to 23 bytes free in its four
+pages, too few for anything.
+
+- **The switch is a module to the core.** The tool assembles
+  `src/chain.asm` (112 bytes) for A and B's entry points and loads it to
+  $0380 with A's parts. The tape buffer is free once the core runs:
+  stage 1's header part ran there, and the core's exit stub, copied to
+  $0334-$0371, goes there only after the modules have stopped. The
+  core's `pt_init` is A's init, `pt_frame` and `pt_stop` the switch's.
+- **The signal is a block flag.** The core ORs every good block's flags
+  into `ld_ev`, and bit 2 was spare: B's last block carries `f_chain`
+  ($04). The switch's frame tests it each frame and calls A's frame
+  until it is set. Then it writes B's frame into the core's `pt_frame`,
+  so from the next frame the core calls B directly and the switch isn't
+  run again. It writes the program's step into `pt_step` and 0 into
+  `ld_progress`; the program's first block comes 0.08 s later with its
+  own progress byte. In the vertical blank it turns the screen off and
+  puts the sprite registers and `$D016` back to the KERNAL's values. It
+  calls B's init, which expects the screen off, as after the boot phase,
+  then B's frame. Its `stop` is B's, or A's if the program is in before
+  the switch (it never is: the tool refuses a chain where none of the
+  program loads while B runs).
+- **Progress.** While A runs, the core's step is B's parts' (`pt_step`
+  for 512 bytes fewer than they are) and their blocks' progress bytes
+  are scaled to match, so `ld_progress` is full ($FF, the core's cap)
+  for the last two pages. A's header +26 is B's blocks, and PETSCII-Load
+  shows 000 at $FF. Without that its counter would end at 001: blocks −
+  ⌊blocks × 255 / 256⌋ is 1 for any number of blocks, and the 000 it
+  shows once the program is in never comes for A. In a 48-block picture
+  000 shows for about 45 frames.
+- **The tune.** One tune for both. Its fields go into both headers, and
+  B gets +28 bit 4: the kit's `sidinit` leaves the SID as it is and
+  `musicgo` sets `musicon` without the tune's init; the show module
+  skips its `sidclr` and init the same way. Measured (`tests/
+  chaincheck.py`): the tune's init runs once; B's first play call comes
+  a frame after the screen goes off for a picture, and three for
+  Flappy-Load, whose init draws its screens.
+- **Memory.** B loads while A runs: they can't overlap, and the tune
+  must miss both (`SS.game_ok` against each, the tune placed clear of
+  both). PETSCII-Load at $E000 overlaps every other module, so a chain
+  builds it at $A000 (`petbase`; `tools/build.py` makes
+  `petscii_chain.prg` beside the usual one, and its screen part is the
+  same). The screen part's origin is a setting too (`lowat`): the
+  assembler only moves forward, so the $A000 build assembles a copy of
+  it at $9C00, which is thrown away. The program's live blocks come
+  after the switch, so only B's claims and the tune's push its bytes to
+  after the module; A's memory is the program's once B runs.
+- **Speeds.** B's blocks load at A's margin (A's jitter) and A's share
+  of the CPU; the program's at B's.
+- **The switch's addresses in a table.** Its six (A's frame and stop,
+  B's init, frame and stop, the program's step) are 12 bytes at its end,
+  used through `jmp ()`, so a copy can be filled in without assembling:
+  SlopLoad 64's payload carries it (`pl_sw`) and patches those bytes.
+- **SlopLoad 64** chains too. Its module lives in the 12 KB under the
+  I/O and the KERNAL, and a PETSCII screen with a picture is about
+  16 KB, so it never holds B. Line 4 reads B with the same `ldgame` as A
+  (A's 45 bytes of fields set aside with `gswap` and put back), keeps
+  B's fields, its first 32 bytes and its claims, and leaves the high pool
+  to be read again for A. When the tape is written, B's blocks come from
+  B's file (a block's source 3: `readb`, channel 5), as the program's
+  blocks come from the program's file. The motor is stopped while each
+  block is read, so the disk has the time. The header bytes the tape
+  needs (+13 to +28) are written over its first block as it is read.
+  B's blocks are in its file's order, at A's jitter and share (the block's
+  set byte's bit 1 picks `mdjit+1` and `mdshr+1`), and the program's at
+  B's. To stay small it treats A's memory as the program's after-the-
+  module memory too (the PC tool loads those bytes while B runs).
+  `tools/c64model.py` (`then=`) is the reference, and SlopLoad 64's tapes
+  match it byte for byte, to a cassette, a .tap and from an REU.
+- **Room for it: SlopLoad 64's messages packed.** SlopLoad 64 had about
+  700 bytes before its music pool ($8D00 on, 17 pages) would pass $9FFF;
+  the chain took about 1,500. Its 2.6 KB of messages now go through a
+  table of 64 pieces chosen at the build (`tools/c64words.py`: greedy, by
+  the bytes each saves, pieces of 2 to 14 characters, two halves of
+  under 256 bytes). In a packed text the bytes $C0-$FF (unused: no text
+  has capitals) are pieces, and `print`'s character routine (`prch`,
+  `c64/words.asm`) prints them. That freed 855 bytes. A text is packed
+  only when everything that uses it prints it: a label used at an
+  offset (`tx_with+2`, an empty string at its end), read a byte at a time
+  or given to `setnam` is left as it is, and the build checks each
+  packed text decodes to its source. The other C64 tools set
+  `prch = chrout`. 91 bytes were left; when pictures became modules
+  (PICTURE-LM's, on line 3) SlopLoad 64's own picture reading and its
+  bank search went, and about 1,240 are left (the second module's own
+  line, 4, took some back).
+- **PETSCII-LM** writes A at $A000 when its line 8 says so: the two
+  builds differ in 149 bytes, all addresses' high bytes $40 apart, so it
+  flips them (EOR $40) in its copy around the writing; the table is
+  `tools/c64build.py`'s, from the two builds.
 
 ### SID tunes
 
@@ -766,7 +940,7 @@ for edge (a cassette recording).
 
 **The menu** (`ui.asm`) is drawn whole on a cleared screen each time:
 the title, the machine (`machine.asm`: the CPU, PAL or NTSC from the
-raster's last line, the expansion memory), lines 1-9 and 0 one a row. A
+raster's last line, the expansion memory), lines 1-9 one a row. A
 number writes that line's name in reverse under the menu and asks its
 questions below it; "press any key" then clears the screen and draws the
 menu again. Answers are read key by key with GETIN (`io.asm`'s
@@ -804,8 +978,21 @@ start of every `mkcore`, xors them back, the same list both ways; so
 that it can, `corefd` first puts `bflat` back as built (`ldx ld_seq`),
 since one colour writes `ldx #colour` over it (`tests/c64modes.py`
 makes the core in one mode after another and checks each). Stage 1
-gets the PC tool's two patches. The menu's list has the three after
-the styles, one colour asking for its colour (`opt_fcol`).
+gets the PC tool's two patches.
+
+**Colours and effect: two lines, one mode.** Line 7 picks the colours
+(`opt_pal`: a style, rainbow to black, or your own, `ownl`: a count and
+1-12 colours, typed as `6,14,3` and parsed by `ownin`), line 8 the
+effect (`opt_eff`: standard, the six of `slopload.py`'s FX, block).
+`lnset` turns the two into the one mode the plan and the coder read
+(`opt_lines`, with `opt_fcol`, `opt_fx`, `opt_fxb`), as
+`c64model.lines_for()` does: standard draws a style's own number (black
+is `st_black`), your own of one colour `st_one`, of more `st_own` (a
+table style whose list is `ownl`: `stcol` reads it there instead of
+from the cassette buffer); an effect starts from the colours' first
+(rainbow's: 0, the PC tool's default); block is `st_block`. It also
+switches the cycle off where it can't go, so the two lines can be set
+in either order.
 
 **Room.** The music pool's 17 pages must end by $9FFF, and the tool's
 code and buffers come before it. Since the `.sid` trial moved to SID-SLM
@@ -824,7 +1011,7 @@ file into memory, a drive's files listed by their ending):
 
 | what | where it is kept |
 |---|---|
-| a module (`.lm`) or a picture (`.koa`) | the RAM under the I/O and the KERNAL, $D000-$FFF9 (12 KB), one at a time: the other is read again when the show wants it |
+| a module (`.lm`) | the RAM under the I/O and the KERNAL, $D000-$FFF9 (12 KB); read again if the show module was put over it |
 | a tune's file (a `.slm`), as read | $A000 (then its bytes to the music pool; its relocations, if it has them, to $C700) |
 | the tune | the music pool, 17 pages below $A000, at the same offset in its page as where it plays |
 | the show module, moved to its place | made at $BC00, then to $F800 (past a picture in the high pool) |
@@ -834,16 +1021,16 @@ tape, as `c64model.setup()` does, rule for rule and in the same order:
 the tune's checks (out of the loader's memory and I/O, its workspace
 out of the loader's), beside a module its zero page, rate and longest
 call, and its place (where it is, or for a `.slm` that can move the
-highest page that works); for a picture or music show, the show
-module's place and the picture's VIC bank (the PC tool's `place_show`:
-the least of the program under them), the module moved by its list of
+highest page that works); for the tune alone, the show module's place
+(the PC tool's `place_show` with no picture: the least of the program
+under it), the module moved by its list of
 address high bytes, and the loader's share from the tune's longest call
 (integer arithmetic, so the model and the C64 agree to the byte). The
 header bytes are patched in place: the module's in the high pool (its
 music fields put back from the file's when the next tape has no music),
 the show module's in its copy. The planner then takes the parts in tape
-order (the tune, the picture's screen, colours and bitmap, the module's
-parts with the main one last) and the claims (24 ranges at most) that
+order (the tune, then the module's parts with the main one last, or the
+show module for a tune alone) and the claims (24 ranges at most) that
 decide which of the program loads while the show runs.
 
 **A `.sid`'s trial run** (`trial.asm`, in SID-SLM; SlopLoad 64 itself
