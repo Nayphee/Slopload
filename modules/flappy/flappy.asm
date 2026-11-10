@@ -30,6 +30,10 @@
 ; ---- the standard parts (src/modhead.asm, src/modkit.asm) ----
 g_claim = $fc00                 ; end of the memory claimed
 g_jitter = 48                   ; worst edge timing jitter (tests/jitter.py)
+g_border = 1                    ; it leaves the border to the loader (gk_bord)
+g_sfx = 1                       ; it makes effects on voice 3 (beside SlopLoad's player)
+g_wait = 1                      ; with -wait it plays on until SPACE or a game's end (the kit's)
+g_count = 1                     ; with -countdown its status line counts blocks (the kit's)
 g_share = 35                    ; the most of the cpu (%) the loader may take
 gk_barhalf = 0                  ; the status bar: 9 characters, 1 px a step
 gk_srow = 24*40                 ; the status line: row 24
@@ -142,7 +146,14 @@ spc = $8b                       ; 1: space held (start key)
 dbg_space = $8e                 ; debug: non-zero presses space once loaded
 dbg_auto = $8f                  ; debug: non-zero plays by itself
 
+*=$ce80                         ; the fade (every module's tune fades out at the
+lowpart                         ; end) and its scratch: a second part, past
+        incasm "fadekit.asm"    ; SlopLoad's player at $c000 (tools/build.py
+        incasm "fadescr.asm"    ; splits it off)
+lowend
+
 *=$e000
+mainpart
         incasm "modhead.asm"
         incasm "chars.asm"
 
@@ -165,7 +176,7 @@ init    jsr gk_musinit          ; before the bird's characters (2-3) are
         and #$fc                ; vic bank 3
         sta $dd00
         lda #0
-        sta $d020
+        jsr gk_bord
         sta $d023               ; black outlines
         lda #col_sky
         sta $d021
@@ -180,6 +191,8 @@ init    jsr gk_musinit          ; before the bird's characters (2-3) are
         sta dbg_space
         sta front
         sta nfront
+        sta sfxtime             ; (no effect left over: its gate-off would
+        sta sfxprio             ; land on a tune's voice 3)
         lda #6
         sta ntscc
         lda #$a7
@@ -259,9 +272,7 @@ frame
         bne @held               ; ntsc: hold every sixth
 @tick   jsr tick
 @held   jsr status
-        lda exitreq
-        cmp #1
-        rts
+        jmp gk_exit             ; (c set: end, the music faded out first)
 
 ; ------------------------------------------------------------
 ; show  (vertical blank) the staged buffer and bird block
@@ -583,14 +594,9 @@ tick    inc frm
         bne t_title
         jmp t_over
 
-; ---- get ready: the bird bobs, fire starts; once the program is
-; in, a player who hasn't started gets it straight away ----
-t_title bit ld_state
-        bpl @wait
-        lda #1
-        sta exitreq
-        jmp birdpos
-@wait   lda frm
+; ---- get ready: the bird bobs, fire starts (the program starts as
+; soon as it's in, unless -wait: the kit's startkey) ----
+t_title lda frm
         lsr a
         lsr a
         and #15
@@ -650,12 +656,10 @@ t_dead  jsr fall
         jsr span
 @s      jmp birdpos
 
-; ---- game over: once loaded, the program starts; before, a
-; lockout, then fire plays again ----
-t_over  bit ld_state
-        bpl @nl
-        lda #1
-        sta exitreq
+; ---- game over: once loaded, the program starts (gk_done: with -wait,
+; the end of a game); before, a lockout, then fire plays again ----
+t_over  jsr gk_done
+        bcc @nl
         jmp birdpos
 @nl     lda tmr
         cmp #lockout
@@ -1410,7 +1414,8 @@ imghi   byte >birdimg,>birdimg+33,>birdimg+66,>birdimg+99
         byte >birdimg+264,>birdimg+297,>birdimg+330,>birdimg+363
 
         incasm "modkit.asm"
-        incasm "tables.asm"
-c_space = c_sky
 codeend
         incasm "birdgfx.asm"
+        incasm "tables.asm"     ; (the texts after the graphics: the code is full to $f000)
+        incasm "modinit.asm"    ; (init only: in screen a, which drawall draws over after)
+c_space = c_sky

@@ -12,7 +12,7 @@ print   stx p3
         ldy #0
 @c      lda (p3),y
         beq @x
-        jsr chrout
+        jsr prch                ; (chrout; SlopLoad 64's words.asm: $c0-$ff a word)
         iny
         bne @c
         inc p3+1

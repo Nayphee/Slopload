@@ -397,6 +397,8 @@ pickfile
         ldy #>q_fdrive
         jsr asknum
         bcs @no
+        tax                     ; (drive 0: none, as 0 from the list)
+        beq @zero
         cmp #8
         bcc @no
         cmp #31

@@ -1,12 +1,15 @@
 ; ------------------------------------------------------------
 ; ui.asm  -  SlopLoad 64's menu: every setting on a line of its own,
-; changed by its number at any time; return writes the tape (and the
+; changed by its number at any time; return masters the tape (and the
 ; settings stay for the next one)
 ;
-; The screen is cleared and the menu drawn whole each time (rows 0-13:
-; the title, the machine, lines 1-9 and 0 in a row, the keys). A number
+; The screen is cleared and the menu drawn whole each time (rows 0-12:
+; the title, the machine, lines 1-8 in a row, the keys). A number
 ; puts that line's name in reverse on row 15 and its questions under
-; it; when it is done, "press any key" and the menu again.
+; it; when it is done, "press any key" and the menu again. What shows
+; while the program loads follows from lines 3 and 4: the module (with
+; the tune, if any), the tune alone on a blank screen, or neither (the
+; screen off). A picture is a module (PICTURE-LM makes one).
 ; ------------------------------------------------------------
 pok     byte 0                  ; a program read
 tnset   byte 0                  ; the name on tape typed (else the program's)
@@ -31,24 +34,24 @@ ui      jsr mdraw
         jsr ptitle
         jsr adisk
         jmp @j+3
-@nd     cmp #'0'
+@nd     cmp #'1'
         bcc @k
         cmp #'9'+1
         bcs @k
-        and #15                 ; 0-9: its line
+        and #15                 ; 1-9: its line
         pha
         jsr ptitle
         pla
         asl a
         tax
-        lda acts,x
+        lda acts-2,x
         sta @j+1
-        lda acts+1,x
+        lda acts-1,x
         sta @j+2
 @j      jsr @j                  ; (patched: the line's action)
         jsr anykey
         jmp ui
-@go     lda #10                 ; "write the tape"
+@go     lda #10                 ; "master the tape"
         jsr ptitle
         lda pok                 ; a program?
         bne @c
@@ -67,7 +70,7 @@ ui      jsr mdraw
         jmp ui
 @ok     clc
         rts
-acts    word acol,aprog,aname,ashow,agame,amusic,apic,aspeed,astart,aout
+acts    word aprog,aname,agame,asecond,amusic,aspeed,acol,aeff,aout
 tx_needp text "choose a program first (1)",13,0
 tx_notape text "a supercpu can't reach the cassette:",13,"write a .tap file (9), or switch it off",13,0
 
@@ -89,7 +92,7 @@ anykey  sec                     ; (on a new line, unless at its start)
 tx_anyk text 155,"press any key",5,0
 
 ; ------------------------------------------------------------
-; ptitle  line a's name (10: writing the tape) in reverse on row ttlrow,
+; ptitle  line a's name (10: mastering the tape) in reverse on row ttlrow,
 ; the cursor under it
 ; ------------------------------------------------------------
 ptitle  pha
@@ -110,8 +113,8 @@ ptitle  pha
         jsr chrout
         pla
         tax
-        lda lablo,x
-        ldy labhi,x
+        lda lablo-1,x
+        ldy labhi-1,x
         tax
         jmp @p
 @w      ldx #<tx_write
@@ -133,11 +136,11 @@ ptitle  pha
         jmp print
 tx_ttl  text 154,18," ",0       ; light blue, reverse
 tx_ttle text 146,5,13,0         ; (off, white, the next row)
-tx_write text "write the tape",0
+tx_write text "master the tape",0
 tx_disk text "@ disk",0
 
 ; ------------------------------------------------------------
-; mdraw  the screen cleared, the menu (rows 0-14)
+; mdraw  the screen cleared, the menu (rows 0-12)
 ; ------------------------------------------------------------
 mdraw   ldx #<tx_head
         ldy #>tx_head
@@ -159,21 +162,24 @@ mdraw   ldx #<tx_head
         lda #' '
         jsr chrout
         jsr prrange
+        lda opt_start           ; and sys (not at $0801), if it fits
+        ora opt_start+1
+        beq @p1
+        lda #29
+        jsr room
+        bcs @p1
+        ldx #<tx_sys
+        ldy #>tx_sys
+        jsr print
+        lda opt_start
+        ldx opt_start+1
+        jsr prhex4
         jmp @p1
 @p0     jsr none
 @p1     lda #2                  ; 2 name on tape
         jsr item0
         jsr prtname
-        lda #3                  ; 3 show
-        jsr item0
-        ldx opt_show
-        lda showlo,x
-        ldy showhi,x
-        tax
-        jsr print
-        ldx #1                  ; 4 module (grey when the show has none)
-        jsr used
-        lda #4
+        lda #3                  ; 3 module
         jsr item0
         lda gok
         beq @g0
@@ -181,11 +187,23 @@ mdraw   ldx #<tx_head
         ldx #<gnlen
         ldy #>gnlen
         jsr prfile
+        lda bok                 ; (its options, when it ends the load)
+        bne @g1
+        jsr propts
         jmp @g1
 @g0     jsr none
-@g1     ldx #2                  ; 5 music
-        jsr used
-        lda #5
+@g1     lda #4                  ; 4 second module, after it
+        jsr item0
+        lda bok
+        beq @b0
+        lda bdev
+        ldx #<bnlen
+        ldy #>bnlen
+        jsr prfile
+        jsr propts
+        jmp @b1
+@b0     jsr none
+@b1     lda #5                  ; 5 music
         jsr item0
         lda mok
         beq @m0
@@ -199,19 +217,7 @@ mdraw   ldx #<tx_head
         jsr prfile
         jmp @m2
 @m0     jsr none
-@m2     ldx #3                  ; 6 picture
-        jsr used
-        lda #6
-        jsr item0
-        lda kok
-        beq @k0
-        lda kdev
-        ldx #<knlen
-        ldy #>knlen
-        jsr prfile
-        jmp @k1
-@k0     jsr none
-@k1     lda #7                  ; 7 speed
+@m2     lda #6                  ; 6 speed
         jsr item0
         jsr prspeed
         lda opt_speed
@@ -220,27 +226,32 @@ mdraw   ldx #<tx_head
         ldx #<tx_sdef           ; 0: the default
         ldy #>tx_sdef
         jsr print
-@sp     lda #8                  ; 8 start
+@sp     lda #7                  ; 7 colours: the palette, its colours
         jsr item0
-        lda opt_start
-        ora opt_start+1
-        bne @sys
-        ldx #<tx_run
-        ldy #>tx_run
+        ldy opt_pal
+        jsr prsname
+        lda #' '
+        jsr chrout
+        ldy opt_pal
+        jsr palst
+        lda #1                  ; (all 12 timer values)
+        jsr prswatch
+        lda #8                  ; 8 effect
+        jsr item0
+        jsr prfx                ; (its name and value)
+        lda opt_cyc             ; (the cycle: lnset keeps it where it goes)
+        beq @cy
+        ldx #<tx_pcyc
+        ldy #>tx_pcyc
         jsr print
-        jmp @au
-@sys    ldx #<tx_sys
-        ldy #>tx_sys
+@cy     lda opt_showl           ; (on through the module or show)
+        beq @au
+        jsr lined
+        bcc @au
+        ldx #<tx_pshow
+        ldy #>tx_pshow
         jsr print
-        lda opt_start
-        ldx opt_start+1
-        jsr prhex4
-@au     lda opt_auto
-        beq @au0
-        ldx #<tx_atonce
-        ldy #>tx_atonce
-        jsr print
-@au0    lda #9                  ; 9 write to
+@au     lda #9                  ; 9 write to
         jsr item0
         lda opt_out
         bne @tap
@@ -253,48 +264,44 @@ mdraw   ldx #<tx_head
         ldy #>tapfnl
         jsr prfile
 @o1     lda xmem                ; in one go from the expansion memory
-        beq @o2
+        beq @kp
         lda #28
         jsr room
-        bcs @o2
+        bcs @kp
         ldx #<tx_onego
         ldy #>tx_onego
         jsr print
-@o2     ldx #12                 ; 0 the loading lines' colours
-        lda #0
-        jsr item
-        ldy opt_lines
-        jsr prsname
-        lda #' '
-        jsr chrout
-        ldy opt_lines
-        lda #1                  ; (all 12 timer values)
-        jsr prswatch
-        ldx #13                 ; the keys
+@kp     ldx #12                 ; the keys
         ldy #0
         clc
         jsr plot
         ldx #<tx_keys
         ldy #>tx_keys
         jmp print
-showlo  byte <tx_sh0,<tx_sh1,<tx_sh2,<tx_sh3,<tx_sh4
-showhi  byte >tx_sh0,>tx_sh1,>tx_sh2,>tx_sh3,>tx_sh4
-tx_sh0  text "nothing (the screen off)",0
-tx_sh1  text "a loader module",0
-tx_sh2  text "a picture",0
-tx_sh3  text "a picture and music",0
-tx_sh4  text "music",0
 tx_head text 147,5,"            ",159,"*** ",5,"slopload",159," ***",13,152,0
 tx_sdef text " (the default)",0
-tx_run  text "run",0
-tx_sys  text "sys ",0
-tx_atonce text ", at once",0
+tx_sys  text " sys ",0
 tx_cass text "cassette",0
 tx_onego text ", in one go",0
-tx_keys text 155,"0-9: change  @: disk  return: write it",5,0
+tx_keys text 155,"1-9: change @: disk return: master tape",5,0
 
-; item  line a's number and name (green) on row x; the value's colour
-; next (white, or grey: used); item0: on the row after the last
+; propts  the module's options as the menu shows them: +wait, +count
+propts  lda opt_gopt
+        and #2
+        beq @c
+        ldx #<tx_pwait
+        ldy #>tx_pwait
+        jsr print
+@c      lda opt_gopt
+        and #8
+        beq @x
+        ldx #<tx_pcnt
+        ldy #>tx_pcnt
+        jmp print
+@x      rts
+
+; item  line a's number and name (green) on row x, the value white next;
+; item0: on the row after the last
 item0   inc irow
         ldx irow
 item    stx irow
@@ -312,45 +319,24 @@ item    stx irow
         jsr chrout
         pla
         tax
-        lda lablo,x
-        ldy labhi,x
+        lda lablo-1,x
+        ldy labhi-1,x
         tax
         jsr print
-        lda usedc               ; the value: white, or grey if unused
-        jsr chrout
         lda #5
-        sta usedc
-        rts
+        jmp chrout
 irow    byte 0
-usedc   byte 5
-lablo   byte <tl0,<tl1,<tl2,<tl3,<tl4,<tl5,<tl6,<tl7,<tl8,<tl9
-labhi   byte >tl0,>tl1,>tl2,>tl3,>tl4,>tl5,>tl6,>tl7,>tl8,>tl9
-tl0     text "colours   ",0
+lablo   byte <tl1,<tl2,<tl3,<tl4,<tl5,<tl6,<tl7,<tl8,<tl9
+labhi   byte >tl1,>tl2,>tl3,>tl4,>tl5,>tl6,>tl7,>tl8,>tl9
 tl1     text "program   ",0
 tl2     text "name      ",0
-tl3     text "show      ",0
-tl4     text "module    ",0
+tl3     text "module    ",0
+tl4     text "second    ",0
 tl5     text "music     ",0
-tl6     text "picture   ",0
-tl7     text "speed     ",0
-tl8     text "start     ",0
+tl6     text "speed     ",0
+tl7     text "colours   ",0
+tl8     text "effect    ",0
 tl9     text "write to  ",0
-
-; used  the next value grey unless the show uses it: x 1 a game, 2 a
-; tune, 3 a picture (0: always used)
-used    lda #5
-        sta usedc
-        txa
-        beq @x
-        ldy opt_show
-        lda usetab,y
-        and usebit,x
-        bne @x
-        lda #151
-        sta usedc
-@x      rts
-usetab  byte 0,1+2,4,2+4,2      ; (game 1, tune 2, picture 4) by show
-usebit  byte 0,1,2,4
 
 ; room  c clear if the cursor is at column a or before
 room    sta t0
@@ -515,8 +501,8 @@ aprog   lda prgdev
         lda tnset               ; the name on tape: the program's, unless typed
         bne @st
         jsr tnprog
-@st     lda #0                  ; how it starts: RUN at $0801, else sys
-        sta opt_start
+@st     lda #0                  ; how it starts: RUN at $0801, else sys,
+        sta opt_start           ; asked (its load address unless another)
         sta opt_start+1
         lda paddr
         cmp #$01
@@ -528,7 +514,31 @@ aprog   lda prgdev
         sta opt_start
         lda paddr+1
         sta opt_start+1
+        bne askst               ; (never 0: it's past $0801)
 @x      rts
+askst   ldx #<q_start
+        ldy #>q_start
+        jsr print
+        lda opt_start
+        ldx opt_start+1
+        jsr prhex4
+        ldx #<tx_ask
+        ldy #>tx_ask
+        jsr print
+        lda #6
+        jsr readline
+        lda inlen
+        beq @x
+        jsr inhex
+        bcs askst
+        cpx #0                  ; (0 isn't one: it would be taken as RUN,
+        bne @a                  ; and the program never started)
+        cmp #0
+        beq askst
+@a      sta opt_start
+        stx opt_start+1
+@x      rts
+q_start text "it isn't at $0801: start with sys [",0
 q_drive text "drive with the program [",0
 q_prog  text "its file name? ",0
 
@@ -581,37 +591,32 @@ aname   ldx #<q_tname
 q_tname text "the name after found (16 keys; clr,",13
         text "colours too). return: the program's",13,"? ",0
 
-; 3  what shows while it loads
-ashow   ldx #<q_show
-        ldy #>q_show
+; 3  the module: a .lm file (a game, a loading screen, a picture:
+; PICTURE-LM makes one); 0: none. Another one clears line 4's second
+agame   ldx #<tx_mod0
+        ldy #>tx_mod0
         jsr print
-        lda opt_show
-        ldx #<q_show2
-        ldy #>q_show2
-        jsr asknum
-        bcs @x
-        cmp #5
-        bcs @x
-        sta opt_show
-@x      rts
-q_show  text "0 nothing",13
-        text "1 loader module",13
-        text "2 picture",13
-        text "3 picture and music",13
-        text "4 music",13,0
-q_show2 text "show [",0
-
-; 4  the module: a .lm file
-agame   lda gdev
+        lda gdev
         ldx #<sfx_lm
         ldy #>sfx_lm
         jsr pickfile
-        bcs @x
+        bcc @rd
+        lda pkzero              ; 0: none (and no second, no options)
+        beq @x0
+        lda #0
+        sta gok
+        sta bok
+        sta opt_gopt
+@x0     rts
+@rd     lda #0                  ; (a new first: no second)
+        sta bok
         ldx #<tx_reading
         ldy #>tx_reading
         jsr print
         jsr ldgame
-        bcs @x
+        bcc @ok
+        rts
+@ok
         lda fdev
         sta gdev
         ldx #16
@@ -621,7 +626,6 @@ agame   lda gdev
         bpl @c
         lda #1
         sta gok
-        sta opt_show            ; (the show: this game)
         ldx #<tx_gok
         ldy #>tx_gok
         jsr print
@@ -640,10 +644,58 @@ agame   lda gdev
         cpx gnp
         bcc @p
         lda #13
-        jmp chrout
+        jsr chrout
+        jmp askopt
+
+; 4  the second module, after the first (a chain, the PC tool's -then):
+; the first shows while the second's parts load, then the second while
+; the program loads; 0: none
+asecond lda gok
+        bne @ok
+        ldx #<tx_first
+        ldy #>tx_first
+        jmp print
+@ok     ldx #<tx_mod0
+        ldy #>tx_mod0
+        jsr print
+        jsr athen               ; (chain.asm)
+        lda #1                  ; (the first stays chosen, whatever the second)
+        sta gok
+
+; askopt  the tool's options the module that ends the load keeps (its
+; +27 bits 2, 3: -wait, -countdown): asked, else off
+askopt  lda gbord
+        ldx bok
+        beq @kb
+        lda bbord
+@kb     sta kbord
+        lda #0                  ; the tool's options it keeps (its +27 bits
+        sta opt_gopt            ; 2, 3): asked, else off
+        lda kbord
+        and #4
+        beq @nw
+        ldx #<q_gwait
+        ldy #>q_gwait
+        jsr ynq
+        asl a                   ; y: bit 1 (-wait)
+        sta opt_gopt
+@nw     lda kbord
+        and #8
+        beq @x
+        ldx #<q_gcnt
+        ldy #>q_gcnt
+        jsr ynq
+        beq @x
+        lda opt_gopt
+        ora #8                  ; y: bit 3 (-countdown)
+        sta opt_gopt
 @x      rts
 sfx_lm  byte 3,$2e,$4c,$4d,0    ; ".lm"
+tx_mod0 text "a .lm (pictures: picture-lm); 0: none",13,0
 tx_gok  text "a module, parts at ",0
+tx_first text "choose a module first (3)",13,0
+q_gwait text "once loaded, wait for space or the game's",13,"end? y/n [n] ",0
+q_gcnt  text "count the blocks down? y/n [n] ",0
 tx_reading text "reading it...",13,0
 
 ; 5  the music: a .slm (0: none); a .sid is refused: SID-SLM makes one
@@ -683,15 +735,7 @@ amusic  ldx #<tx_mus0
         cpx #32
         bcc @mt
 @mte    lda #13
-        jsr chrout
-        lda opt_show            ; (the show: music, or picture and music)
-        bne @s2
-        lda #4
-        sta opt_show
-@s2     cmp #2
-        bne @x
-        lda #3
-        sta opt_show
+        jmp chrout              ; (it fades out at the end, as every module's tune)
 @x      rts
 @r      jmp prwhyr
 ; prwhyr  why the tune was refused, in red, and a new line
@@ -705,38 +749,7 @@ prwhyr  lda #28
 sfx_mus byte 4,$2e,$53,$4c,$4d,0  ; ".slm"
 tx_mus0 text "a .slm (sid-slm makes one); 0: none",13,0
 
-; 6  the picture: a .koa
-apic    lda kdev
-        ldx #<sfx_koa
-        ldy #>sfx_koa
-        jsr pickfile
-        bcs @x
-        ldx #<tx_reading
-        ldy #>tx_reading
-        jsr print
-        jsr ldpic
-        bcs @x
-        lda fdev
-        sta kdev
-        ldx #16
-@c      lda fnlen,x
-        sta knlen,x
-        dex
-        bpl @c
-        lda opt_show            ; (the show: a picture, with its music)
-        cmp #3
-        beq @x
-        cmp #4
-        bne @p
-        lda #3
-        sta opt_show
-        rts
-@p      lda #2
-        sta opt_show
-@x      rts
-sfx_koa byte 4,$2e,$4b,$4f,$41,0  ; ".koa"
-
-; 7  the speed: -12 (the most margin) to 13 (opt_speed: the speed +
+; 6  the speed: -12 (the most margin) to 13 (opt_speed: the speed +
 ; spneg). A minus anywhere makes it below 0 (a space for innum, which
 ; skips them)
 aspeed  ldx #<q_speed
@@ -792,49 +805,6 @@ prspeed lda opt_speed
         pla
 @p      ldx #0
         jmp prdec16
-
-; 8  how it starts: sys (a program not at $0801), and at once or not
-astart  lda pok
-        beq @au
-        lda paddr               ; at $0801: run
-        cmp #$01
-        bne @sys
-        lda paddr+1
-        cmp #$08
-        beq @au
-@sys    ldx #<q_start
-        ldy #>q_start
-        jsr print
-        lda opt_start
-        ldx opt_start+1
-        jsr prhex4
-        ldx #<q_end
-        ldy #>q_end
-        jsr print
-        lda #6
-        jsr readline
-        lda inlen
-        beq @au
-        jsr inhex
-        bcs @sys
-        cpx #0                  ; (0 isn't one: it would be taken as RUN,
-        bne @st                 ; and the program never started)
-        cmp #0
-        beq @sys
-@st     sta opt_start
-        stx opt_start+1
-@au     lda #0
-        sta opt_auto
-        ldx #<q_auto
-        ldy #>q_auto
-        jsr print
-        jsr askyn
-        bne @x
-        inc opt_auto
-@x      rts
-q_start text "start with sys [",0
-q_end   text "]? ",0
-q_auto  text "with a module or a show: start as soon",13,"as it is loaded? y/n [n] ",0
 
 ; 9  cassette or a .tap file (its drive and name); with expansion
 ; memory, in one go from it or a block at a time
@@ -920,8 +890,11 @@ q_tfile text ".tap file [name on tape.tap]? ",0
 tx_dottap text ".tap"
 q_xmem  text "write it in one go from the expansion",13,"memory? y/n [y] ",0
 
-; 0  the loading lines' colours: a style (the pc's -stripes)
-acol    ldx #0                  ; the styles, two a row: number, colours, name
+; 7  the colours: a palette, as the pc's -stripes NAME (a style: rainbow
+; to black), or your own (1 to 12 colours, as -stripes 6,14,3; one alone
+; a plain border). The standard effect draws them as stripes; the others
+; start from the first (line 8)
+acol    ldx #0                  ; the palettes, two a row: number, colours, name
 @l      stx t2
         cpx #10
         bcs @nn
@@ -933,6 +906,7 @@ acol    ldx #0                  ; the styles, two a row: number, colours, name
         lda #' '
         jsr chrout
         ldy t2
+        jsr palst
         lda #2
         jsr prswatch
         lda #' '
@@ -942,7 +916,7 @@ acol    ldx #0                  ; the styles, two a row: number, colours, name
         lda t2
         lsr a
         bcs @r
-        lda #19                 ; (the second column: "one colour" to 38)
+        lda #19                 ; (the second column)
         sta t0
         sec
         jsr plot
@@ -954,29 +928,274 @@ acol    ldx #0                  ; the styles, two a row: number, colours, name
         jsr chrout
 @n      ldx t2
         inx
-        cpx #nmodes
+        cpx #npal
         bcc @l
-        lda opt_lines
+        lda #13
+        jsr chrout
+        lda opt_pal
         ldx #<q_col
         ldy #>q_col
         jsr asknum
         bcs @x
-        cmp #nmodes
+        cmp #npal
         bcs @x
-        sta opt_lines
-        cmp #st_one             ; one colour: which
-        bne @x
-        lda opt_fcol
-        ldx #<q_fcol
-        ldy #>q_fcol
-        jsr asknum
+        sta t2
+        cmp #npal-1             ; your own: its colours
+        bne @s
+        ldx #<q_own
+        ldy #>q_own
+        jsr print
+        jsr prown
+        ldx #<tx_ask
+        ldy #>tx_ask
+        jsr print
+        lda #36
+        jsr readline
+        jsr ownin
         bcs @x
-        cmp #16
-        bcs @x
-        sta opt_fcol
+@s      lda t2
+        sta opt_pal
+        jmp lnset
 @x      rts
 q_col   text "colours [",0
-q_fcol  text "its colour 0-15 [",0
+q_own   text "your own, 1-12 of 0-15 [",0
+
+; 8  the effect: 1 standard (the colours as stripes, SlopLoad's own), 2-7
+; the classic loaders' (the pc's -stripes classic ... eor:N, from the
+; colours' first), 8 a colour a block (-stripes block); its value (and,
+; ora, eor); then the cycle, where it goes, and the lines on through the
+; module or the music
+aeff    ldx #0                  ; the effects: number and name
+@l      stx t2
+        txa
+        clc
+        adc #1
+        ldx #0
+        jsr prdec16
+        lda #' '
+        jsr chrout
+        ldx t2
+        lda effnlo,x
+        ldy effnhi,x
+        tax
+        jsr print
+        lda #' '
+        jsr chrout
+        ldx t2
+        inx
+        cpx #neff
+        bcc @l
+        lda #13
+        jsr chrout
+        lda opt_eff
+        clc
+        adc #1
+        ldx #<q_fx
+        ldy #>q_fx
+        jsr asknum
+        bcs @q
+        cmp #1
+        bcc @q
+        cmp #neff+1
+        bcs @q
+        sbc #0                  ; (c clear: one less)
+        sta opt_eff
+        tax
+        dex
+        cpx #nfxs
+        bcs @q                  ; (standard, block: no value)
+        lda fxval,x
+        beq @q
+        lda opt_fxn
+        ldx #<q_fxn
+        ldy #>q_fxn
+        jsr asknum
+        bcs @q
+        cmp #16
+        bcs @q
+        sta opt_fxn
+@q      jsr lnset
+        jsr cycok               ; the cycle, where it goes
+        bcc @l2
+        ldx #<q_cyc
+        ldy #>q_cyc
+        jsr ynq
+        sta opt_cyc
+@l2     jsr lined               ; bars (or the cycle): during the module too?
+        bcc @x
+        ldx #<q_showl
+        ldy #>q_showl
+        jsr ynq
+        sta opt_showl
+@x      rts
+q_fx    text "effect [",0
+q_fxn   text "its value 0-15 [",0
+q_cyc   text "a colour on each page loaded? y/n [n] ",0
+q_showl text "bars during the module or music? y/n [n] ",0
+
+; lnset  opt_lines (and opt_fcol, opt_fx, opt_fxb) from the colours
+; (opt_pal, ownl) and the effect (opt_eff), as tools/c64model.py's
+; lines_for; the cycle off where it can't go
+;   uses: a, x, y, p3
+lnset   ldx opt_eff
+        beq @std
+        lda #st_block
+        cpx #neff-1
+        beq @set                ; (a colour a block)
+        dex                     ; an effect, from the colours' first
+        stx opt_fx
+        ldy opt_pal
+        jsr palst
+        lda #0
+        jsr stcol
+        sta opt_fxb
+        lda #st_fx
+        bne @set
+@std    lda opt_pal             ; standard: a style's number (black: st_black)
+        cmp #npal-1
+        bne @set
+        lda #st_own             ; your own: two or more, a list
+        ldx ownl
+        dex
+        bne @set
+        lda ownl+1              ; one: that colour (core_flat)
+        sta opt_fcol
+        lda #st_one
+@set    sta opt_lines
+        jsr cycok
+        bcs @x
+        lda #0
+        sta opt_cyc
+@x      rts
+
+; cycok  c set when the cycle can go: an effect, black or one colour
+cycok   lda opt_lines
+        cmp #st_fx
+        beq @y
+        cmp #st_black
+        beq @y
+        cmp #st_one
+        beq @y
+        clc
+        rts
+@y      sec
+        rts
+
+; palst  y: palette y's style (your own: st_own)
+palst   cpy #npal-1
+        bne @x
+        ldy #st_own
+@x      rts
+
+; ownin  your own colours from inbuf: 1 to 12 of 0-15, apart by commas
+; or spaces, to ownl (an empty line keeps it); c set if not (as it was)
+;   uses: a, x, y, t0, t1, dsbuf
+ownin   ldx #0
+        ldy #0
+        lda inlen
+        beq @ok
+@nx     lda #$ff                ; (no digits yet)
+        sta t0
+@c      cpx inlen
+        beq @end
+        lda inbuf,x
+        inx
+        cmp #','
+        beq @sep
+        cmp #' '
+        beq @sep
+        sec
+        sbc #'0'
+        cmp #10
+        bcs @bad
+        sta t1
+        lda t0
+        bmi @d0                 ; (the first digit)
+        beq @d0                 ; (0 then a digit: the digit)
+        cmp #1
+        bne @bad
+        lda t1                  ; 1 then a digit: 10-15
+        adc #9                  ; (c set: + 10)
+        cmp #16
+        bcs @bad
+        bcc @st
+@d0     lda t1
+@st     sta t0
+        jmp @c
+@sep    jsr @put
+        bcs @bad
+        bcc @nx
+@end    jsr @put
+        bcs @bad
+        tya
+        beq @bad                ; (none)
+        sta ownl
+@cp     lda dsbuf-1,y
+        sta ownl,y
+        dey
+        bne @cp
+@ok     clc
+        rts
+@put    lda t0                  ; the number ended: kept (12 at most)
+        bmi @ok
+        cpy #12
+        bcs @bad
+        sta dsbuf,y
+        iny
+        clc
+        rts
+@bad    sec
+        rts
+
+; prown  your own colours: "6,14,3"
+prown   ldy #1
+@l      sty t6
+        cpy #2
+        bcc @n
+        lda #','
+        jsr chrout
+@n      ldy t6
+        lda ownl,y
+        ldx #0
+        jsr prdec16
+        ldy t6
+        cpy ownl
+        iny
+        bcc @l
+        rts
+
+; prfx  the effect's name, and its value (and, ora, eor)
+prfx    ldx opt_eff
+        lda effnlo,x
+        ldy effnhi,x
+        tax
+        jsr print
+        ldx opt_eff
+        dex
+        cpx #nfxs
+        bcs @x                  ; (standard, block)
+        lda fxval,x
+        beq @x
+        lda #' '
+        jsr chrout
+        lda opt_fxn
+        ldx #0
+        jmp prdec16
+@x      rts
+
+; ynq  the question at x/y, answered y or n: a = 1 for y
+ynq     jsr print
+        jsr askyn
+        ldx #0
+        cmp #'y'
+        bne @n
+        inx
+@n      txa
+        rts
+tx_pshow text " +during",0
+tx_pcyc text " +cycle",0
+tx_pwait text " +wait",0
+tx_pcnt text " +count",0
 
 ; @  a drive's directory and its commands (the command channel), until
 ; return alone

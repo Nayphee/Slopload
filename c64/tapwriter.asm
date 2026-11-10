@@ -69,6 +69,7 @@ minbanks = 8                    ; 512 KB at least
         jmp main
 
         incasm "io.asm"
+prch = chrout                   ; (print's character: no words packed here)
         incasm "disk.asm"
         incasm "machine.asm"
 

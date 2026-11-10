@@ -86,6 +86,8 @@ fmap = $4100                    ; each character's code in the module (256)
         jmp main
 
         incasm "io.asm"
+        incasm "disk.asm"       ; ($ and @: a drive's files and commands)
+prch = chrout                   ; (print's character: no words packed here)
         incasm "wfile.asm"
 
 ; ---- io.asm's variables ----
@@ -170,11 +172,17 @@ menu    ldx #$ff
         beq @k
         cmp #13
         bne @q
-        lda #8                  ; return: write it
+        lda #9                  ; return: write the module
         jsr ptitle
         jsr awrite
         jmp @any
-@q      cmp #'q'
+@q      cmp #'@'                ; @: the disk, its files and commands
+        bne @qq
+        lda #11
+        jsr ptitle
+        jsr adisk
+        jmp @any
+@qq     cmp #'q'
         bne @s
         jsr cmdclose
         jsr look
@@ -183,16 +191,16 @@ menu    ldx #$ff
         jmp quit
 @s      cmp #'s'
         bne @n
-        lda #9                  ; s: show it
+        lda #10                 ; s: show it
         jsr ptitle
         jsr ashow
         bcc menu
         jmp @any
 @n      cmp #'1'
         bcc @k
-        cmp #'8'
+        cmp #'9'
         bcs @k
-        and #15                 ; 1-7: its line
+        and #15                 ; 1-8: its line
         pha
         jsr ptitle
         pla
@@ -206,7 +214,44 @@ menu    ldx #$ff
         bcc menu
 @any    jsr anykey
         jmp menu
-acts    word ascreen,amsg,arow,aspeed,acols,acount,afont
+acts    word ascreen,amsg,arow,aspeed,acols,acount,afont,achain
+
+; adisk  @: a drive [8], then its status and commands, and $ its files
+; (disk.asm, as SlopLoad 64's @)
+adisk   lda ddev
+        ldx #<q_ddrive
+        ldy #>q_ddrive
+        jsr asknum
+        bcs @x
+        cmp #8
+        bcc @x
+        cmp #31
+        bcs @x
+        sta ddev
+        jsr dcmd
+@x      sec                     ; (said: a key, then the menu)
+        rts
+
+; diskkey  a file name typed as $ (the drive's files) or @ alone (its
+; status and commands): done, c set (ask again); else c clear
+diskkey lda inlen
+        beq @no
+        lda inbuf
+        cmp #'$'
+        bne @at
+        jsr dirshow
+        sec
+        rts
+@at     cmp #'@'
+        bne @no
+        lda inlen
+        cmp #1
+        bne @no
+        jsr dcmd
+        sec
+        rts
+@no     clc
+        rts
 
 quit    jsr print
         lda #$37
@@ -318,7 +363,16 @@ mdraw   jsr look
         ldx #<fnlen
         ldy #>fnlen
         jsr prfile
-@k2     ldx #10                 ; the keys
+@k2     lda #8                  ; 8 a chain's first (at $a000), or not
+        jsr item0
+        ldx #<tx_chno
+        ldy #>tx_chno
+        lda chmask
+        beq @c8
+        ldx #<tx_chyes
+        ldy #>tx_chyes
+@c8     jsr print
+        ldx #11                 ; the keys
         ldy #0
         clc
         jsr plot
@@ -354,8 +408,8 @@ item    stx irow
         lda #5                  ; (white for the next)
         sta usedc
         rts
-lablo   byte <tl1,<tl2,<tl3,<tl4,<tl5,<tl6,<tl7,<tl8,<tl9
-labhi   byte >tl1,>tl2,>tl3,>tl4,>tl5,>tl6,>tl7,>tl8,>tl9
+lablo   byte <tl1,<tl2,<tl3,<tl4,<tl5,<tl6,<tl7,<tl8,<tl9,<tl10,<tl11
+labhi   byte >tl1,>tl2,>tl3,>tl4,>tl5,>tl6,>tl7,>tl8,>tl9,>tl10,>tl11
 
 ; used  the next value grey with no message (it doesn't count)
 used    lda #5
@@ -398,7 +452,7 @@ ptitle  pha
         ldy #>tx_ttl
         jsr print
         pla
-        cmp #8
+        cmp #9
         bcs @w
         pha
         ora #'0'
@@ -485,11 +539,14 @@ afont   lda fdev
         cmp #31
         bcs afont
         sta fdev
-        ldx #<q_ffile
+        sta ddev                ; ($ and @: disk.asm, on this drive)
+@fn     ldx #<q_ffile
         ldy #>q_ffile
         jsr print
         lda #16
         jsr readline
+        jsr diskkey             ; ($: its files, @: its commands)
+        bcs @fn
         lda inlen
         beq @keep               ; return alone: kept
         cmp #1
@@ -747,6 +804,51 @@ awrite  jsr needscr
         sec
 @x      rts
 
+; ------------------------------------------------------------
+; achain  8: the module first in a chain (SlopLoad 64's line 3, a second
+; module after it; slopload.py's -then)? Then written at $a000, not
+; $e000: clear of a picture module's $c000-$ffbf
+; ------------------------------------------------------------
+achain  ldx #<q_chain
+        ldy #>q_chain
+        jsr print
+        lda #1
+        jsr readline
+        lda #0
+        ldx inlen
+        beq @s
+        ldx inbuf
+        cpx #'y'
+        bne @s
+        lda #$40
+@s      sta chmask
+        clc
+        rts
+chmask  byte 0                  ; $40: at $a000 (each address's high byte $40 less)
+
+; creloc  the main part moved to $a000 and back (chmask $40; 0: nothing):
+; the 149 bytes the two builds differ in, PETSCII-Load's addresses' high
+; bytes, eor $40 (tools/c64build.py: lmrlo, lmrhi)
+;   uses: a, x, y, t0, t1
+creloc  lda chmask
+        beq @x
+        ldx #0
+@r      lda #<lmmain
+        clc
+        adc lmrlo,x
+        sta t0
+        lda #>lmmain
+        adc lmrhi,x
+        sta t1
+        ldy #0
+        lda (t0),y
+        eor #$40
+        sta (t0),y
+        inx
+        cpx #lmnrel
+        bne @r
+@x      rts
+
 ; wsave  with a message: the rows next to it kept and cleared where they
 ; aren't empty (said); its row's colours kept and the edited ones put in
 wsave   lda msgn
@@ -865,11 +967,14 @@ ask     lda prgdev
         cmp #31
         bcs ask
         sta prgdev
+        sta ddev                ; ($ and @: disk.asm, on this drive)
 @name   ldx #<q_file
         ldy #>q_file
         jsr print
         lda #16
         jsr readline
+        jsr diskkey             ; ($: its files, @: its commands)
+        bcs @name
         lda inlen
         bne @nm
         lda pok                 ; return alone: the screen there is, kept
@@ -1165,11 +1270,13 @@ name    ldx #<q_out
         jsr wcreate
         bcc @go
         rts
-@go     ldx #3
+@go     jsr creloc          ; (a chain's first: built at $a000)
+        ldx #3
         jsr chkout
         lda #<lmmaddr           ; the main part: its address and length,
         jsr chrout              ; its bytes, the message
         lda #>lmmaddr
+        eor chmask
         jsr chrout
         lda #<lmmlen
         clc
@@ -1208,6 +1315,7 @@ name    ldx #<q_out
         sty cnt
         ldy #>1000
         jsr wrmap
+        jsr creloc              ; (back to $e000)
         jsr wclose
         bcs @x
         ldx #<tx_blocks
@@ -1922,14 +2030,21 @@ tl4     text "speed     ",0
 tl5     text "colours   ",0
 tl6     text "counter   ",0
 tl7     text "font      ",0
-tl8     text "write it",0
-tl9     text "show it",0
+tl8     text "chain     ",0
+tl9     text "write the module",0
+tl10    text "show it",0
+tl11    text "@ disk",0
+tx_chno text "no: at $e000",0
+tx_chyes text "first in a chain: at $a000",0
+q_chain text "first in a chain (slopload 64's second",13
+        text "module, a picture's, after it): written",13
+        text "at $a000, clear of the picture? y/n [n] ",0
 tx_pxf  text " pixels a frame",0
 tx_asscr text "as on the screen",0
 tx_edited text "edited",0
 tx_crow text "row ",0
 tx_ccol text ", column ",0
-tx_mkeys text 155,"1-7: change  s: show it  q: quit",13,"return: write it",30,0
+tx_mkeys text 155,"1-8: change  s: show  @: disk  q: quit",13,"return: write the module",30,0
 tx_ttl  text 154,18," ",0       ; light blue, reverse
 tx_ttle text 146,30,13,0        ; (off, green, the next row)
 tx_anyk text 155,"press any key",30,0
@@ -1938,11 +2053,12 @@ tx_needm text "type a message first (2)",13,0
 tx_cntw text "the counter is on the message's rows:",13,"move one of them (3 or 6)",13,0
 q_drive text "drive with the .pet file [",0
 q_fdrive text "drive with the font (.64c) [",0
-q_ffile text "its file name (return: keep it,",13,"-: the c64's own)? ",0
+q_ffile text "its file name ($: files, @: disk, return:",13,"keep it, -: the c64's own)? ",0
 tx_fc64 text "the c64's own",0
 tx_fread text "read: choose a screen (1) to see it in it",13,0
 tx_fshort text "too short for a font (8 bytes",13,"a character after its address)",13,0
-q_file  text "its file name? ",0
+q_file  text "its file name ($: files, @: disk)? ",0
+q_ddrive text "drive [",0
 tx_ask  text "]? ",0
 tx_reading text "reading it...",13,0
 tx_ok   text "a key shows it, another goes on",13,0
@@ -1950,7 +2066,7 @@ tx_short text "the file ended early: not a .pet file",13,0
 tx_size text "not a 40 x 25 .pet file",13,0
 tx_case text "its case is neither upper nor lower:",13,"not a .pet file",13,0
 q_out   text "the module's name [",0
-tx_blocks text 13,"choose it in slopload 64 (4: the module)",13,0
+tx_blocks text 13,"choose it in slopload 64 (3: the module)",13,0
 tx_edit text "a scrolling message (empty: none)",0
 tx_keys text "type it: it goes in at the cursor.",13,"crsr keys move it, del: the one before,",13,"inst: a space, home: the start,",13,"clr (shift home): all of it gone.",13,"return: done.",0
 tx_of   text " of 200  ",0

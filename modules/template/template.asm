@@ -25,6 +25,10 @@ d018v = $98                     ; screen $e400, characters $e000
 ; ---- the standard parts ----
 g_claim = codeend               ; end of the memory claimed
 g_jitter = 48                   ; measure: tests/jitter.py --module template
+g_border = 1                    ; it leaves the border to the loader (gk_bord)
+g_sfx = 1                       ; it makes effects on voice 3 (beside SlopLoad's player)
+g_wait = 1                      ; with -wait it plays on until SPACE or a game's end (the kit's)
+g_count = 1                     ; with -countdown its status line counts blocks (the kit's)
 g_share = 35                    ; the most of the cpu (%) the loader may take
 gk_barhalf = 0                  ; the status bar: 9 characters, 1 px a step
 gk_srow = 24*40                 ; the status line: row 24
@@ -82,7 +86,7 @@ init    jsr gk_musinit          ; first: the header is characters 0-3
         dex
         bpl @z
         sta $d015               ; no sprites
-        sta $d020
+        jsr gk_bord             ; (the border: gk_bord, never sta $d020)
         sta $d021
         sta dbg_space
         sta dbg_auto
@@ -163,9 +167,7 @@ frame
         bne @held               ; ntsc: hold every sixth
 @tick   jsr tick
 @held   jsr status
-        lda exitreq
-        cmp #1
-        rts
+        jmp gk_exit             ; (c set: end, the music faded out first)
 
 ; ------------------------------------------------------------
 ; tick  one step of the game (in the vertical blank: it is short)
@@ -192,13 +194,9 @@ tick    inc frm
         cmp #st_over
         beq t_over
 
-; ---- title: once the program is in, a player who hasn't started gets
-; it straight away; fire starts a round ----
-t_title bit ld_state
-        bpl @w
-        lda #1
-        sta exitreq
-@w      lda fpress
+; ---- title: fire starts a round (the program starts as soon as it's
+; in, unless -wait: the kit's startkey) ----
+t_title lda fpress
         beq @x
         jmp playgo
 @x      rts
@@ -222,13 +220,10 @@ t_play  lda fire
         lda #10
         jmp centre
 
-; ---- game over: once loaded, the program starts; before, after a
-; lockout, fire plays again ----
-t_over  bit ld_state
-        bpl @nl
-        lda #1
-        sta exitreq
-@nl     lda tmr
+; ---- game over: once loaded, the program starts (gk_done: with -wait,
+; the end of a game); before, after a lockout, fire plays again ----
+t_over  jsr gk_done
+        lda tmr
         cmp #lockout
         bcc @x
         lda fpress
@@ -411,5 +406,8 @@ autopilot
         rts
 
         incasm "modkit.asm"
+        incasm "modinit.asm"
         incasm "tables.asm"
+        incasm "fadekit.asm"    ; (every module's tune fades out at the end)
+        incasm "fadescr.asm"
 codeend

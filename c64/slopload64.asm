@@ -78,6 +78,7 @@ reumax = 255                    ; REU banks sized (to 16 MB: its size said; a ta
 reusav = $c600                  ; (their first bytes, kept while sizing)
 f_gameready = $01
 f_mainend = $02
+f_chain = $04                   ; a chain's second module is in (src/chain.asm)
 f_underio = $08
 f_last = $80
 maxblk = 40
@@ -89,6 +90,7 @@ maxblk = 40
 
         incasm "writer.asm"
         incasm "io.asm"
+        incasm "words.asm"      ; (generated: tools/c64build.py packs the messages)
         incasm "plan.asm"
         incasm "ui.asm"
         incasm "disk.asm"
@@ -97,6 +99,7 @@ maxblk = 40
         incasm "xmem.asm"
         incasm "files.asm"
         incasm "setup.asm"
+        incasm "chain.asm"
         incasm "math.asm"
 
 ; ------------------------------------------------------------
@@ -115,6 +118,9 @@ again   ldx #$ff
         jsr close
         lda #3
         jsr close
+        lda #1                  ; (a chain's second module's file too)
+        sta bopen
+        jsr bclose
         jsr cmdclose
         lda #<rtiv              ; restore: nothing (the nmi vector)
         sta $0318
@@ -175,13 +181,13 @@ master  jsr mkcore
         lda #>romd1
         sta p1+1
         lda #$89
-        jsr romexp58
+        jsr romexps1
         lda #<romd2
         sta p1
         lda #>romd2
         sta p1+1
         lda #$09
-        jsr romexp58
+        jsr romexps1
         lda opt_out             ; in one go?
         ora xmem
         beq @c
@@ -560,7 +566,8 @@ secrs   sta t0
         lda #0
         sta t3
         jmp secrunt
-; secromd / secromd2  a KERNAL block's symbols (1011 / 341 bytes) at a/x
+; secromd / secromd2  a KERNAL block's symbols (1011 bytes / stage 1's
+; block's, (s1blklen+10)*5+1) at a/x
 secromd sta t0
         stx t1
         lda #<1011
@@ -571,9 +578,9 @@ secromd sta t0
 secromd2
         sta t0
         stx t1
-        lda #<341
+        lda #<romdlen
         sta t2
-        lda #>341
+        lda #>romdlen
         sta t3
 secromc lda #0
         sta t4
@@ -748,9 +755,10 @@ rtivs   word rtiv,rtiv,rtiv
 bss     = pl_core
 romh1 = bss                     ; the KERNAL header block's symbols
 romh2 = romh1 + 1011            ; ... its repeat
+romdlen = (s1blklen+10)*5+1     ; (stage 1's block: s1blklen bytes, 20 pulses each, 4 a byte)
 romd1 = romh2 + 1011            ; the data block's
-romd2 = romd1 + 341
-blkb = romd2 + 341              ; header, pad, data, check, trailer
+romd2 = romd1 + romdlen
+blkb = romd2 + romdlen          ; header, pad, data, check, trailer
 btab = blkb + 4300              ; the blocks (maxblk each)
 bal = btab
 bah = bal + maxblk
@@ -770,7 +778,6 @@ bssend = bk + maxblk
 
 coreb = $cb00                   ; the core (4 pages), its check, the bridge
 header = coreb + 1026           ; the KERNAL header (192)
-s1blk = header + 192            ; stage 1's block (58: to $cffb)
 mpoolp  = (bssend+255)/256       ; the music pool: 17 pages (4096 + a page's offset)
 mpoolend = mpoolp*256+$1100
 

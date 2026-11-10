@@ -1,7 +1,7 @@
 ; ------------------------------------------------------------
-; setup.asm  -  SlopLoad 64's game, picture and tune, read from disk and
+; setup.asm  -  SlopLoad 64's module and tune, read from disk and
 ; checked; then what goes on the tape with the program (prepare): the
-; game, or the show module placed with its picture; the tune placed;
+; module, or the show module placed for the tune alone; the tune placed;
 ; the header bytes; the claims. tools/c64model.py's setup() is the
 ; reference: the same rules, the same choices.
 ; ------------------------------------------------------------
@@ -11,15 +11,11 @@ gok     byte 0                  ; a game read and checked
 gdev    byte 8
 gnlen   byte 0
 gname   byte 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
-kok     byte 0                  ; a picture
-kdev    byte 8
-knlen   byte 0
-kname   byte 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
 mok     byte 0                  ; a tune (1), or one refused (2: mwhy)
 mdev    byte 8
 mnlen   byte 0
 mname   byte 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
-hpool   byte 0                  ; the high pool holds: 0 nothing, 1 the game, 2 the picture
+hpool   byte 0                  ; the high pool holds: 0 nothing, 1 the game
 
 ; ---- the game (in the high pool) ----
 gnp     byte 0                  ; its parts (the main one first)
@@ -33,12 +29,11 @@ gclml   byte 0                  ; the main part's claim's end
 gclmh   byte 0
 gjit    byte 0
 gshr    byte 0
+gbord   byte 0                  ; its header's +27: bit 0 it leaves the border
+                                ; to the loader (the lines on through it), bit 1
+                                ; it makes effects on voice 3 (SlopLoad's player)
 gentry  word 0,0,0              ; init, frame, stop
 gorig   byte 0,0,0,0,0,0,0,0,0  ; its header's +16 to +24, as read
-
-; ---- the picture (in the high pool) ----
-kbit    word 0                  ; its bitmap in the pool (screen +8000, colour +9000)
-kbg     byte 0
 
 ; ---- the tune (in the music pool) ----
 mkind   byte 0                  ; 2: a prepared .slm
@@ -187,6 +182,9 @@ ldgame  lda #0
         bne @s
         lda #35
 @s      sta gshr
+        ldy #27                 ; +27: the border, the effects
+        jsr hget
+        sta gbord
         ldy #16                 ; the music fields as the file has them
 @go     jsr hget
         sta gorig-16,y
@@ -302,62 +300,6 @@ gclaims lda #0
         inx
         bne @p
 @x      rts
-
-; ------------------------------------------------------------
-; ldpic  the picture fdev/fname read into the high pool: a Koala
-; picture (10,003 bytes with its load address; 10,000 to 10,003)
-;   out:  c set if it isn't one (said); kok
-; ------------------------------------------------------------
-ldpic   lda #0
-        sta kok
-        sta hpool
-        jsr tohigh
-        bcc @r
-        rts
-@r      lda #2
-        sta hpool
-        lda flen+1              ; 10000-10003: $2710-$2713
-        cmp #$27
-        bne @bad
-        lda flen
-        sec
-        sbc #$10
-        bcc @bad
-        cmp #4
-        bcs @bad
-        tax                     ; 0-3: the bytes over 10,000
-        lda #<hpbase
-        sta kbit
-        lda #>hpbase
-        sta kbit+1
-        cpx #2                  ; 10002, 10003: a load address first
-        bcc @nl
-        inc kbit
-        inc kbit
-@nl     lda #0                  ; the background: the byte after the colours
-        sta kbg
-        txa
-        and #1
-        beq @ok
-        lda kbit                ; (10001, 10003: there is one)
-        clc
-        adc #<10000
-        sta p1
-        lda kbit+1
-        adc #>10000
-        sta p1+1
-        ldy #0
-        jsr hget
-        and #15
-        sta kbg
-@ok     lda #1
-        sta kok
-        clc
-        rts
-@bad    ldx #<tx_notkoa
-        ldy #>tx_notkoa
-        jmp prfail
-tx_notkoa text "not a koala picture (10,003 bytes)",13,0
 
 ; ------------------------------------------------------------
 ; ldmus  the tune fdev/fname: a .sid (checked by a trial run) or a .slm
@@ -692,7 +634,7 @@ rsn9      text "the module's zero page",0
 rsn10     text "module needs once a frame",0
 rsn11     text "too slow beside a module",0
 rsn12     text "in the module's memory",0
-rsn13     text "no room with the picture",0
+rsn13     text "no room beside the show module",0
 rsn14     text "in the loader's memory",0
 rsn15     text "too much cpu for loading",0
 
@@ -712,8 +654,6 @@ lmus    byte 0                  ; the tune and its workspace (17)
 lban    byte 0                  ; place_show's: loader, i/o, the tune (20)
         word 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
         word 0,0,0,0,0,0
-lpic    byte 0                  ; the picture's screen and bitmap
-        word 0,0,0,0
 lclaim  byte 0                  ; the claims: the program there loads after (24)
         word 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
         word 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
@@ -918,31 +858,6 @@ u2      byte 0
 u3      byte 0
 usum    byte 0,0,0
 
-; underl  usum += the program's bytes under every range in the list at a/y
-underl  sta ulist
-        sty ulist+1
-        lda #0
-        sta uli
-@c      lda ulist
-        sta p3
-        lda ulist+1
-        sta p3+1
-        ldy #0
-        lda (p3),y
-        cmp uli
-        beq @x
-        bcc @x
-        ldx uli
-        lda ulist
-        ldy ulist+1
-        jsr lget
-        jsr under
-        inc uli
-        bne @c
-@x      rts
-ulist   word 0
-uli     byte 0
-
 ; ------------------------------------------------------------
 ; mlist  lmus: the tune at mat (its length mlen) and its workspace
 ; ------------------------------------------------------------
@@ -1000,22 +915,68 @@ showok  jsr mlist
         jmp plshow
 
 ; ------------------------------------------------------------
-; place_tune  the tune where its file has it if pltest (gameok or
+; place_tune  a tune in SlopLoad's own player (slpchk), with plsfx set,
+; at $c000 if pltest passes there (mflg 1: the player's flags and stop
+; where the kit has them, voice 3 for the module's effects, the ntsc
+; pitch); else the tune where its file has it if pltest (gameok or
 ; showok) passes, else (a prepared tune that can move) the highest page,
-; at the same offset, where it does: moved there. (Moved for an earlier
-; tape, it goes back first: each tape places it as c64model does.)
-;   in:   pltest set
-;   out:  c set if it fits nowhere
+; at the same offset, where it does: moved there (mflg 2). (Moved for
+; an earlier tape, it goes back first: each tape places it as c64model
+; does.)
+;   in:   pltest, plsfx set
+;   out:  c set if it fits nowhere; mflg
 ; ------------------------------------------------------------
 pltune  lda mload+1             ; (moves keep the offset in the page)
         cmp morig+1
-        beq @h
+        beq @c
         lda morig
         sta mat
         lda morig+1
         sta mat+1
         jsr mmove
-@h      lda mload
+@c      lda #2
+        sta mflg
+        lda plsfx
+        beq @h
+        jsr slpchk
+        bcc @h
+        lda #0
+        sta mat
+        sta t0
+        sta t2
+        lda #$c0
+        sta mat+1
+        sta t1
+        cmp mload+1
+        beq @c0                 ; (there already)
+        lda mnrel
+        ora mnrel+1
+        beq @h
+        lda mlen                ; its end ($d000 at most: 4096 bytes)
+        sta t2
+        lda mlen+1
+        clc
+        adc #$c0
+        sta t3
+        lda #<lmove
+        ldy #>lmove
+        jsr rovl
+        bcs @h
+        jsr rovlw
+        bcs @h
+@c0     jsr pltry
+        bcc @h
+        lda #1
+        sta mflg
+        lda mload+1
+        cmp #$c0
+        beq @in
+        jsr mmove
+@in     clc
+        rts
+@h      lda #2
+        sta mflg
+        lda mload
         sta mat
         lda mload+1
         sta mat+1
@@ -1065,6 +1026,37 @@ pltune  lda mload+1             ; (moves keep the offset in the page)
         rts
 pltry   jmp (pltest)
 pltest  word gameok
+plsfx   byte 0                  ; a player tune may go at $c000 (flags 1)
+mflg    byte 2                  ; the header's +24: 1 SlopLoad's player at $c000, 2 a sid
+
+; slpchk  c set if the tune is in SlopLoad's own player: its jump table
+; at the start of a page (init, play, stop, then the flags byte), init
+; and play the first two jumps, "SLP1" after the flags
+slpchk  lda mload
+        bne @no
+        cmp minit
+        bne @no
+        lda mload+1
+        cmp minit+1
+        bne @no
+        cmp mplay+1
+        bne @no
+        lda mplay
+        cmp #3
+        bne @no
+        ldx #6
+@b      ldy slpo,x
+        lda mpool,y
+        cmp slpv,x
+        bne @no
+        dex
+        bpl @b
+        sec
+        rts
+@no     clc
+        rts
+slpo    byte 0,3,6,10,11,12,13
+slpv    byte $4c,$4c,$4c,$53,$4c,$50,$31
 lmove   byte 2
         word $0000,$0800,$d000,$e000
 
@@ -1132,14 +1124,14 @@ mmove   lda mat+1
         rts
 
 ; ------------------------------------------------------------
-; plshow  place_show: the VIC bank (sbank) and the module's address
-; (sbase) for the show module and the picture: clear of the loader, I/O,
-; the tune (lmus, when there is one) and each other, with the least of
-; the program under them (the first found of the least)
-;   in:   kuse (a picture), muse (a tune: lmus)
+; plshow  place_show: the show module's address (sbase), the tune alone
+; with it (VIC bank 3): clear of the loader, I/O and the tune (lmus,
+; when there is one), with the least of the program under it (the first
+; found of the least)
+;   in:   muse (a tune: lmus)
 ;   out:  c set if there's room
 ; ------------------------------------------------------------
-sbstart = $fe00-showlen/256*256 ; the module's highest place to try
+sbstart = $fe00-showclaim/256*256 ; the module's highest place to try
 plshow  lda #0
         sta lban
         sta sfound
@@ -1163,85 +1155,29 @@ plshow  lda #0
         sta sbest
         sta sbest+1
         sta sbest+2
-        lda #3
-        sta sbk
-@bank   lda #0                  ; the picture's screen and bitmap here
-        sta lpic
-        lda kuse
-        beq @np
-        lda sbk                 ; bank x $40 + $0c, $0f; + $20, $3f
-        asl a
-        asl a
-        asl a
-        asl a
-        asl a
-        asl a
-        sta t4
-        lda #$00
-        sta t0
-        lda #$e8
-        sta t2
-        lda t4
-        ora #$0c
-        sta t1
-        ora #$03
-        sta t3
-        lda #<lpic
-        ldy #>lpic
-        jsr ladd
-        lda #$00
-        sta t0
-        lda #$40
-        sta t2
-        lda t4
-        ora #$20
-        sta t1
-        ora #$1f
-        sta t3
-        lda #<lpic
-        ldy #>lpic
-        jsr ladd
-        lda #<lpic              ; clear of the banned?
-        sta lov1
-        lda #>lpic
-        sta lov1+1
-        lda #<lban
-        sta lov2
-        lda #>lban
-        sta lov2+1
-        jsr lovl
-        bcc @np
-        jmp @nbank
-@np     lda #$ca                ; the module: $ca00 first, then from the top
+        lda #$ca                ; the module: $ca00 first, then from the top
         sta sbh
         lda #1
         sta sfirst
-@base   lda #0                  ; its range
+@base   lda #0                  ; its range: what it claims
         sta t0
         lda sbh
         sta t1
-        lda #<showlen
+        lda #<showclaim
         sta t2
         lda sbh
         clc
-        adc #>showlen
+        adc #>showclaim
         sta t3
         lda #<lban
         ldy #>lban
         jsr rovl
         bcs @nb
-        lda #<lpic
-        ldy #>lpic
-        jsr rovl
-        bcs @nb
-        lda #0                  ; the program under them
+        lda #0                  ; the program under it
         sta usum
         sta usum+1
         sta usum+2
         jsr under
-        lda #<lpic
-        ldy #>lpic
-        jsr underl
         lda usum                ; less than the best?
         cmp sbest
         lda usum+1
@@ -1255,8 +1191,6 @@ plshow  lda #0
         sta sbest+1
         lda usum+2
         sta sbest+2
-        lda sbk
-        sta sbank
         lda sbh
         sta sbase+1
         lda #0
@@ -1273,42 +1207,27 @@ plshow  lda #0
         sta sfirst
         lda #>sbstart
         sta sbh
-        beq @bq0
-        jmp @base
-@bq0
+        bne @nx
 @dn     dec sbh
         lda sbh
         cmp #$08
-        bcc @bq1
-        jmp @base
-@bq1
-@nbank  lda kuse                ; the next bank (with a picture)
-        beq @done
-        lda sbest
-        ora sbest+1
-        ora sbest+2
-        beq @done
-        dec sbk
-        bmi @done
-        jmp @bank
+        bcc @done
+@nx     jmp @base
 @done   lda sfound
         cmp #1                  ; (c set: found)
         rts
-sbk     byte 0
 sbh     byte 0
 sfirst  byte 0
 sfound  byte 0
 sbest   byte 0,0,0
-sbank   byte 3
 sbase   word 0
-kuse    byte 0                  ; a picture on the tape
 muse    byte 0                  ; a tune on the tape
 
 ; ------------------------------------------------------------
 ; shshare  the loader's share beside a show's tune (c64model.show_share):
 ; calls = the most of 19968 x 256 / pal and 16832 x 256 / ntsc; need =
-; cyc x calls x 13 / 2560 + 900; avail = 17095 (less 1000 with a
-; picture); share = 100 x (avail - need) / avail, 85 at most
+; cyc x calls x 13 / 2560 + 900; avail = 17095; share = 100 x
+; (avail - need) / avail, 85 at most
 ;   out:  a; c set if under 25 (refused)
 ; ------------------------------------------------------------
 shshare lda #<19968
@@ -1382,13 +1301,7 @@ shshare lda #<19968
         sta shav
         lda #>17095
         sta shav+1
-        lda kuse
-        beq @av
-        lda #<16095
-        sta shav
-        lda #>16095
-        sta shav+1
-@av     lda t4                  ; need < avail?
+        lda t4                  ; need < avail?
         cmp shav
         lda t5
         sbc shav+1
@@ -1460,8 +1373,8 @@ ptlh    byte 0,0,0,0,0,0,0,0
 ptio    byte 0,0,0,0,0,0,0,0
 modon   byte 0                  ; a module (the game or the show module)
 mdent   word 0,0,0              ; its init, frame, stop
-mdjit   byte 0
-mdshr   byte 0
+mdjit   byte 0,0                ; its jitter (a chain: the second's, then the first's)
+mdshr   byte 0,0                ; its share (the same)
 mdscr   byte 0                  ; the screen on while it runs
 
 prepare lda opt_lines           ; a style: its patch and colours in the
@@ -1480,10 +1393,10 @@ prepare lda opt_lines           ; a style: its patch and colours in the
 @p      lda #0
         sta npart
         sta lclaim
+        sta chainon
         sta modon
         sta muse
-        sta kuse
-        lda opt_show
+        jsr shset               ; what shows: the module, music, or nothing
         bne @s
         clc
         rts
@@ -1494,31 +1407,30 @@ prepare lda opt_lines           ; a style: its patch and colours in the
         ldx #<tx_needg
         ldy #>tx_needg
         jmp prfail
-@gm     lda mok                 ; a game: music if a tune is chosen
+@gm     lda bok                 ; a second module: a chain
+        sta chainon
+        lda opt_showl           ; the lines on through it: it must leave
+        beq @gb                 ; the border alone (its header's +27; a
+        jsr lined               ; chain's second too)
+        bcc @gb
+        lda gbord
+        ldx bok
+        beq @g1
+        and bbord
+@g1     lsr a
+        bcs @gb
+        ldx #<tx_gbord
+        ldy #>tx_gbord
+        jmp prfail
+@gb     lda mok                 ; a game: music if a tune is chosen
         beq @hp
         cmp #1
         bne @mref
         inc muse
         bne @hp
-@ng     cmp #4                  ; 2, 3: a picture
-        beq @nk
-        lda kok
-        bne @k
-        ldx #<tx_needk
-        ldy #>tx_needk
-        jmp prfail
-@k      inc kuse
-@nk     lda opt_show            ; 3, 4: a tune
-        cmp #3
-        bcc @hp
-        lda mok
+@ng     lda mok             ; 4: the tune alone
         cmp #1
         beq @mu
-        cmp #2
-        beq @mref
-        ldx #<tx_needm
-        ldy #>tx_needm
-        jmp prfail
 @mref   ldx #<tx_mref               ; (and why again: it was said when it
         ldy #>tx_mref               ; was read, a menu ago)
         jsr print
@@ -1527,7 +1439,7 @@ prepare lda opt_lines           ; a style: its patch and colours in the
         ldy #>tx_mref2
         jmp prfail
 @mu     inc muse
-@hp     jsr hpready             ; the game or the picture in the pool
+@hp     jsr hpready             ; the module in the pool
         bcc @t
         rts
 @t      lda muse                ; the tune: what any tune keeps to
@@ -1540,19 +1452,30 @@ prepare lda opt_lines           ; a style: its patch and colours in the
         bne @show
         jmp prgame
 @show   jmp prshow
-tx_needg text "choose a module (4)",13,0
+tx_needg text "choose a module (3)",13,0
 tx_c2bad text "$033c was overwritten: load again",13,0
-tx_needk text "choose a picture (6)",13,0
-tx_needm text "choose some music (5)",13,0
+tx_gbord text "the module keeps its border: the lines",13,"can't go on through it (8)",13,0
 tx_mref text "the music was refused:",13,0
 tx_mref2 text "choose another, or none (5)",13,0
 
-; hpready  the high pool holding what the show needs (read again if
-; the other one is there)
+; shset  opt_show from the module and the tune chosen (lines 3, 4): 1 a
+; module (the tune with it), 4 the tune alone, 0 nothing (z set)
+shset   lda #1
+        ldx gok
+        bne @s
+        lda #4
+        ldx mok
+        bne @s
+        lda #0
+@s      sta opt_show
+        rts
+
+; hpready  the high pool holding the module, for a module (read again
+; if the show module was put over it)
 ;   out:  c set on an error (said)
 hpready lda opt_show
         cmp #1
-        bne @k
+        bne @ok
         lda hpool
         cmp #1
         beq @ok
@@ -1561,16 +1484,6 @@ hpready lda opt_show
         ldy #>gnlen
         jsr setfn
         jmp ldgame
-@k      cmp #4
-        beq @ok
-        lda hpool
-        cmp #2
-        beq @ok
-        lda kdev
-        ldx #<knlen
-        ldy #>knlen
-        jsr setfn
-        jmp ldpic
 @ok     clc
         rts
 
@@ -1669,7 +1582,8 @@ tunepart
 ; prgame  a module: the tune beside it (c64model.game_tune), placed
 ; clear of its claims; its header patched; its parts, the main one last
 ; ------------------------------------------------------------
-prgame  jsr gclaims             ; lmcl
+prgame  jsr gclaims             ; lmcl (a chain's second's too)
+        jsr chclaim
         lda muse
         bne @bq2
         jmp @hd
@@ -1737,6 +1651,12 @@ prgame  jsr gclaims             ; lmcl
         sta pltest
         lda #>gameok
         sta pltest+1
+        lda gbord               ; its effects: SlopLoad's player at $c000
+        ldx chainon             ; (a chain: the second's)
+        beq @sf
+        lda bbord
+@sf     and #2
+        sta plsfx
         jsr pltune
         bcc @hd
         lda #r_ingame
@@ -1773,6 +1693,16 @@ prgame  jsr gclaims             ; lmcl
                                 ; (liveblk: what loads while it runs)
         ldy #26
         jsr hput
+        lda gbord               ; +28: the tool's options (-wait, -countdown),
+        and #$0c                ; for a module that keeps them (its +27);
+        beq @pa                 ; the rest of the byte as its file has it
+        ldy #28
+        jsr hget
+        and #$f5
+        ldx chainon             ; (a chain's first: none of them)
+        bne @c1
+        ora opt_gopt
+@c1     jsr hput
 @pa     lda muse                ; the parts: the tune, the others, the main
         beq @o
         jsr tunepart
@@ -1786,7 +1716,25 @@ prgame  jsr gclaims             ; lmcl
         bne @op
 @mn     ldx #0
         jsr gpart
-        lda #<lmcl              ; the claims: the game's, the tune's
+        jsr chhead              ; a chain: the second's header, the switch
+        lda chainon             ; the first's last part
+        beq @nc
+        jsr chvecs
+        lda #<chainat
+        sta t0
+        lda #>chainat
+        sta t1
+        lda #<pl_sw
+        sta p1
+        lda #>pl_sw
+        sta p1+1
+        lda #<swlen
+        sta t2
+        lda #>swlen
+        sta t3
+        lda #0
+        jsr addpart
+@nc     lda #<lmcl              ; the claims: the game's, the tune's
         sta lcsrc
         lda #>lmcl
         sta lcsrc+1
@@ -1802,9 +1750,25 @@ prgame  jsr gclaims             ; lmcl
         bpl @en
         lda gjit
         sta mdjit
+        sta mdjit+1
         lda gshr
         sta mdshr
-        clc
+        sta mdshr+1
+        lda chainon             ; a chain: the core's frame and stop the
+        beq @x                  ; switch's; the program loads at the
+        lda #<swframe           ; second's speed, the second at the first's
+        sta mdent+2
+        lda #>swframe
+        sta mdent+3
+        lda #<swstop
+        sta mdent+4
+        lda #>swstop
+        sta mdent+5
+        lda bjit
+        sta mdjit
+        lda bshr
+        sta mdshr
+@x      clc
         rts
 gameplaymax = 3700              ; (c64model.GAME_PLAY_MAX)
 
@@ -1877,7 +1841,7 @@ musclaim
 @x      rts
 
 ; mfields  hdrmus: the header's music fields (+16 to +24): init, play,
-; the two play times, 2 (a sid tune)
+; the two play times, mflg (1 SlopLoad's player at $c000, 2 a sid tune)
 mfields ldx #0
 @c      lda minit,x
         sta hdrmus,x
@@ -1890,39 +1854,40 @@ mfields ldx #0
         inx
         cpx #4
         bcc @p
-        lda #2
+        lda mflg
         sta hdrmus+8
         rts
 hdrmus  byte 0,0,0,0,0,0,0,0,0
 
 ; ------------------------------------------------------------
-; prshow  the show module: the tune and the picture placed beside it,
-; the module moved to its place and its header patched; the parts: the
-; tune, the picture's screen, colours and bitmap, the module
+; prshow  the show module, for the tune alone: the tune placed, the
+; module beside it, moved to its place and its header patched; the
+; parts: the tune, the module
 ; ------------------------------------------------------------
-prshow  lda muse
-        beq @nm
-        lda #<showok
+prshow  lda #<showok
         sta pltest
         lda #>showok
         sta pltest+1
+        lda #1                  ; (the show module: its ntsc pitch)
+        sta plsfx
         jsr pltune
         bcc @placed
         lda #r_noroom
         jmp prnot
-@nm     jsr plshow
-        bcs @placed
-        ldx #<tx_noroom
-        ldy #>tx_noroom
-        jmp prfail
 @placed jsr mlist               ; (lmus as placed)
-        ldx #0                  ; the module, moved
-@cp     lda pl_show,x
-        sta showtmp,x
-        lda pl_show+256,x
-        sta showtmp+256,x
-        inx
-        bne @cp
+        lda #<showtmp           ; the module, moved
+        sta p1
+        lda #>showtmp
+        sta p1+1
+        lda #<pl_show
+        sta p2
+        lda #>pl_show
+        sta p2+1
+        lda #<showlen
+        sta t2
+        lda #>showlen
+        sta t3
+        jsr copyn
         lda sbase+1
         sec
         sbc #>showbase
@@ -1943,50 +1908,28 @@ prshow  lda muse
         sta (p1),y
         inx
         bne @r
-@hd     lda showtmp+14          ; the share: the module's, or the tune's
-        sta mdshr
-        lda muse
-        beq @sh
-        jsr shshare
+@hd     jsr shshare             ; the share: the tune's
         bcc @sok
         lda #r_share
         jmp prnot
 @sok    sta mdshr
-@sh     lda mdshr
         sta showtmp+14
-        lda #$ff                ; song, picture, music, bank
-        ldx muse
-        beq @so
-        lda ma
-@so     sta showtmp+13
+        lda ma                  ; the song, no picture, the music, bank 3
+        sta showtmp+13
         lda #$ff
-        ldx kuse
-        beq @bg
-        lda kbg
-@bg     sta showtmp+15
-        lda muse
-        beq @bk
+        sta showtmp+15
         jsr mfields
         ldx #8
 @mf     lda hdrmus,x
         sta showtmp+16,x
         dex
         bpl @mf
-@bk     lda #3                  ; 3 - bank (bank 3 without a picture)
-        ldx kuse
-        beq @b3
-        sec
-        sbc sbank
-        jmp @b
-@b3     lda #0
-@b      sta showtmp+25
-        lda muse                ; the parts
-        beq @np
-        jsr tunepart
-@np     lda kuse
-        beq @mo
-        jsr picparts
-@mo     lda sbase
+        lda #0
+        sta showtmp+25
+        lda #1                  ; +28: the ending: the fade (always)
+        sta showtmp+28
+        jsr tunepart            ; the parts
+        lda sbase
         sta t0
         lda sbase+1
         sta t1
@@ -2000,7 +1943,7 @@ prshow  lda muse
         sta t3
         lda #0
         jsr addpart
-        lda #0                  ; the claims: the module's, the tune's, the picture's
+        lda #0                  ; the claims: the module's, the tune's
         sta t0
         lda sbase+1
         sta t1
@@ -2014,14 +1957,7 @@ prshow  lda muse
         ldy #>lclaim
         jsr ladd
         jsr musclaim
-        lda kuse
-        beq @md
-        lda #<lpic              ; (lpic: for the bank chosen)
-        sta lcsrc
-        lda #>lpic
-        sta lcsrc+1
-        jsr toclaim
-@md     jsr toshow              ; the module to its place in the high pool
+        jsr toshow              ; the module to its place in the high pool
         lda #1                  ; the module
         sta modon
         ldx #5
@@ -2029,20 +1965,13 @@ prshow  lda muse
         sta mdent,x
         dex
         bpl @en
-        lda showtmp+12
-        sta mdjit
-        lda #1
-        sta mdscr
-        lda opt_show
-        cmp #4                  ; music alone: the screen off
-        bne @on
-        lda #0
+        lda #0                  ; the tune alone: the screen off
         sta mdscr
         sta mdjit
-@on     clc
+        clc
         rts
-tx_noroom text "no room for the picture",13,0
-showtmp = $bc00                 ; the module made here, then to showbuf
+showtmp = $b000                 ; the module made here, then to showbuf (the tune's
+                                ; file and the trial are done with $a000-$c0ff by then)
 
 ; toshow  the module from showtmp to showbuf (the high pool); a game
 ; reaching that far there is read again when it's wanted
@@ -2058,98 +1987,29 @@ toshow  lda hpool
         sta p3
         lda #>showbuf
         sta p3+1
+        lda #<showtmp
+        sta p2
+        lda #>showtmp
+        sta p2+1
+        lda #<showlen
+        sta t2
+        lda #>showlen
+        sta t3
         ldy #0
-@l      lda showtmp,y
+@l      lda (p2),y
         jsr hput3
-        iny
-        bne @l
+        inc p2
+        bne @1
+        inc p2+1
+@1      inc p3
+        bne @2
         inc p3+1
-@l2     lda showtmp+256,y
-        jsr hput3
-        iny
-        bne @l2
+@2      lda t2
+        bne @3
+        dec t3
+@3      dec t2
+        lda t2
+        ora t3
+        bne @l
         rts
 
-; picparts  the picture's parts for bank sbank (and lpic for it): the
-; screen, the colours (straight into colour ram), the bitmap
-picparts
-        lda sbank
-        asl a
-        asl a
-        asl a
-        asl a
-        asl a
-        asl a
-        sta t4                  ; the bank's high byte
-        lda #0                  ; screen: bank + $0c00, the bitmap + 8000
-        sta t0
-        lda t4
-        ora #$0c
-        sta t1
-        lda kbit
-        clc
-        adc #<8000
-        sta p1
-        lda kbit+1
-        adc #>8000
-        sta p1+1
-        lda #<1000
-        sta t2
-        lda #>1000
-        sta t3
-        lda #0
-        jsr addpart
-        lda #0                  ; colours: $d800, + 9000, i/o
-        sta t0
-        lda #$d8
-        sta t1
-        lda kbit
-        clc
-        adc #<9000
-        sta p1
-        lda kbit+1
-        adc #>9000
-        sta p1+1
-        lda #1
-        jsr addpart
-        lda #0                  ; bitmap: bank + $2000
-        sta t0
-        lda t4
-        ora #$20
-        sta t1
-        lda kbit
-        sta p1
-        lda kbit+1
-        sta p1+1
-        lda #<8000
-        sta t2
-        lda #>8000
-        sta t3
-        lda #0
-        jsr addpart
-        lda #0                  ; lpic for this bank
-        sta lpic
-        lda #$00
-        sta t0
-        lda #$e8
-        sta t2
-        lda t4
-        ora #$0c
-        sta t1
-        ora #$03
-        sta t3
-        lda #<lpic
-        ldy #>lpic
-        jsr ladd
-        lda #$00
-        sta t0
-        lda #$40
-        sta t2
-        lda t4
-        ora #$20
-        sta t1
-        ora #$1f
-        sta t3
-        lda #<lpic
-        ldy #>lpic
-        jmp ladd

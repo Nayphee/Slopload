@@ -5,16 +5,34 @@
 ; ------------------------------------------------------------
 
 ; ---- options and state ----
-opt_show byte 0                 ; 0 nothing, 1 a module, 2 a picture,
-                                ; 3 a picture and music, 4 music
+opt_show byte 0                 ; 0 nothing, 1 a module, 4 music (shset: from
+                                ; the module and the tune chosen)
 opt_speed byte spneg           ; the speed + spneg (-12 to 13: payload.asm's tables)
 opt_start word 0                ; 0: RUN, else the address to jump to
-opt_auto byte 0                 ; 1: the program starts as soon as it's in
 opt_out byte 0                  ; 0 the cassette, 1 a .tap file
-opt_lines byte 0                ; the loading lines: 0 rainbow (the core as
+opt_pal byte 0                  ; the colours (line 6): a style, 0 rainbow to
+                                ; st_black, or npal-1 your own (ownl)
+opt_eff byte 0                  ; the effect (line 7): 0 standard, 1 to nfxs one
+                                ; of slopload.py's FX, neff-1 a colour a block
+ownl    byte 2,6,14,0,0,0,0,0,0,0,0,0,0 ; your own colours: how many, then they
+opt_lines byte 0                ; the loading lines (ui's lnset, from opt_pal and
+                                ; opt_eff): 0 rainbow (the core as
                                 ; it is), 1 to st_black - 1 a style (core_stripes),
-                                ; st_black, st_block, st_one: no stripes (core_flat)
+                                ; st_black, st_block, st_one: no stripes (core_flat),
+                                ; st_fx an effect (core_fx: opt_fx), st_own
+                                ; your own colours (core_stripes, ownl)
 opt_fcol byte 6                 ; st_one's colour
+opt_fx  byte 0                  ; st_fx's effect: slopload.py's FX, in order (classic,
+                                ; thin, mixed, and, ora, eor)
+opt_fxn byte 5                  ; ... its value (and, ora, eor: 0-15)
+opt_fxb byte 0                  ; ... the border's colour it starts from
+opt_showl byte 0                ; 1: the lines on through the module or show
+                                ; (the pc's -showstripes)
+opt_cyc byte 0                  ; 1: the border a colour on each page (-cycle: an
+                                ; effect, or black or one colour as the plain one)
+opt_gopt byte 0                 ; a module's header +28: bit 1 SPACE alone at the end
+                                ; (-wait), bit 3 the blocks counted down (-countdown);
+                                ; asked only when the module keeps them (+27 bits 2, 3)
 prgdev  byte 8
 tapdev  byte 8
 prglen  byte 0                  ; the program's file name
@@ -45,7 +63,20 @@ pth     byte 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
 ; plan  the blocks, in tape order (bal.. arrays, nblk)
 ;   out:  c set if there are too many (said)
 ; ------------------------------------------------------------
-plan    lda #0
+plan    lda opt_cyc             ; the cycle with a module or show: only with
+        beq @cy                 ; the lines on through it (the border is
+        jsr fxon                ; theirs otherwise)
+        bcc @cy
+        lda modon
+        beq @cy
+        jsr showl
+        bcs @cy
+        ldx #<tx_cycshow
+        ldy #>tx_cycshow
+        jsr print
+        sec
+        rts
+@cy     lda #0
         sta nblk
         sta t6                  ; the module's parts (prepare's), in order
 @mp     lda t6
@@ -75,6 +106,9 @@ plan    lda #0
         ldx nblk
         lda #f_gameready
         sta bfl-1,x
+        lda chainon             ; a chain: the second module's blocks
+        beq @prog
+        jsr addchain
 @prog   jsr bounds              ; the program between the claims' bounds
         lda #0
         sta totlive
@@ -82,7 +116,17 @@ plan    lda #0
         lda #0
         jsr addparts            ; what loads while the game runs
         bcs @x
-        lda nblk
+        lda chainon             ; a chain with none of the program while the
+        beq @cn                 ; second runs: refused
+        lda totlive
+        ora totlive+1
+        bne @cn
+        ldx #<tx_bnone
+        ldy #>tx_bnone
+        jsr print
+        sec
+        rts
+@cn     lda nblk
         sta t7                  ; (the first block after them)
         lda #1
         jsr addparts            ; what loads after it
@@ -90,6 +134,7 @@ plan    lda #0
         ldx nblk                ; flags at the ends
         cpx t7
         beq @nolater
+        ldx nblk
         lda bfl-1,x             ; the last of all
         ora #f_last
         sta bfl-1,x
@@ -106,10 +151,14 @@ plan    lda #0
         ora bfl-1,x
         sta bfl-1,x
         jsr progs               ; progress and the core's step
+        jsr chprogs             ; (a chain: the second's, the switch's step)
         jsr liveblk
         jsr underio
         clc
 @x      rts
+
+tx_cycshow text "the border cycle needs the bars during",13,"the module or music (8: y)",13,0
+tx_bnone text "the program loads where the modules are:",13,"the second would show for no time",13,0
 
 ; liveblk  a game's header +26: the disk blocks its counter counts down,
 ; those that load while it runs (all the program's, unless some of it
@@ -118,13 +167,19 @@ plan    lda #0
 liveblk lda opt_show
         cmp #1
         bne @x
-        lda gppl                ; (the header: the main part's start)
-        sta p1
-        lda gpph
-        sta p1+1
         lda totlive
         ldx totlive+1
         jsr nblocks
+        ldy chainon             ; a chain: the second counts the program's,
+        beq @h                  ; the first the second's
+        sta bhdr+26
+        lda nchain
+        ldx nchain+1
+        jsr nblocks
+@h      ldy gppl                ; (the header: the main part's start)
+        sty p1
+        ldy gpph
+        sty p1+1
         ldy #26
         jmp hput
 @x      rts
@@ -421,7 +476,7 @@ progs   lda #0
         sta done+1
         ldx #0
 @b      cpx nblk
-        bcs @step
+        bcs stepcal
         lda bsrc,x
         cmp #1
         bne @n                  ; the module's own: 0
@@ -455,7 +510,8 @@ progs   lda #0
         sta bprog,x
 @n      inx
         bne @b
-@step   lda #0                  ; 2^24 / total
+; stepcal  stepv: 2^24 / totlive, rounded; 65535 at most
+stepcal lda #0                  ; 2^24 / total
         sta n24
         sta n24+1
         sta n24+2
@@ -506,6 +562,7 @@ divtot  lda totlive
 ; ------------------------------------------------------------
 mkcore  jsr corestd              ; (the fields: in the core's own layout,
         jsr corefd              ; with stripes)
+        jsr corefxd
         lda modon               ; a module: its entry points (or none)
         sta coreb+cpt_game
         ldx #5
@@ -516,8 +573,8 @@ mkcore  jsr corestd              ; (the fields: in the core's own layout,
 @e      sta coreb+cpt_init,x
         dex
         bpl @en
-        lda opt_auto
-        sta coreb+cpt_auto
+        lda #0                  ; (the core's autorun: never; a module ends
+        sta coreb+cpt_auto      ; once the program is in unless -wait)
         ldx #1                  ; RUN (1), or jmp (0)
         lda opt_start
         ora opt_start+1
@@ -540,9 +597,19 @@ mkcore  jsr corestd              ; (the fields: in the core's own layout,
         sta coreb+cpt_step
         lda stepv+1
         sta coreb+1+cpt_step
+        jsr showl               ; the lines through the module or show
+        lda #0
+        bcc @sl
+        lda #$20
+@sl     sta coreb+cpt_strs
         lda opt_lines           ; a style: core_stripes (the fields move
-        beq @ck                 ; with it), or core_flat
-        jsr flatcol
+        beq @ck                 ; with it), or core_flat, or core_fx
+        jsr fxon                ; (an effect, or one colour with the cycle)
+        bcc @nx
+        jsr corefx
+        jsr fxset
+        jmp @ck
+@nx     jsr flatcol
         bcs @fl
         jsr corestr
         jmp @ck
@@ -646,15 +713,58 @@ fl_x    rts
 
 ; flatcol  the style: c set for one with no stripes (core_flat), a its
 ; colour (st_black 0, st_one opt_fcol, st_block 0: the block's own);
-; c clear for rainbow or a table style (keeps x, y)
+; c clear for rainbow, a table style or an effect (keeps x, y)
 flatcol lda opt_lines
         cmp #st_black
         bcc @x
+        cmp #st_fx
+        bcs @fx
         cmp #st_one
         lda #0
         bcc @c
         lda opt_fcol
 @c      sec
+@x      rts
+@fx     clc
+        rts
+
+; showl  c set when the loading lines go on through the module or show:
+; asked (opt_showl), a module or show there is, and the style has lines
+; (or cycles: lined) (keeps x, y)
+showl   lda opt_showl
+        beq @n
+        lda modon
+        beq @n
+        jmp lined
+@n      clc
+        rts
+
+; fxon  c set for core_fx: an effect, or black or one colour with the
+; cycle (the plain effect, fxplain) (keeps x, y)
+fxon    lda opt_lines
+        cmp #st_fx
+        beq @y
+        lda opt_cyc
+        beq @n
+        jsr flatcol
+        bcc @n                  ; (rainbow, a table style: no cycle)
+        lda opt_lines
+        cmp #st_block
+        beq @n
+@y      sec
+        rts
+@n      clc
+        rts
+
+; lined  c set when the border has lines (a style, an effect), or cycles
+; (keeps x, y)
+lined   jsr fxon
+        bcs @x
+        jsr flatcol
+        bcc @y                  ; (rainbow or a table style)
+        clc
+        rts
+@y      sec
 @x      rts
 
 ; s1col  stage 1's border, for a style: its first colour (a table's),
@@ -685,6 +795,142 @@ cmtab   word coreb+c2p2,coreb+c2p2+15,corelen-c2p2      ; (up) the end
         word coreb+c2p1,coreb+c2p1+3,c2p2-c2p1          ; (up) the middle
         word coreb+c2p1+3,coreb+c2p1,c2p2-c2p1          ; (down) the middle
         word coreb+c2p2+15,coreb+c2p2,corelen-c2p2      ; (down) the end
+        word coreb+cfxp+3,coreb+cfxp+8,corelen-cfxp-3   ; (up) core_fx: past the effect's 3rd
+        word coreb+cfxp+8,coreb+cfxp+3,corelen-cfxp-3   ; (down)
+
+; ------------------------------------------------------------
+; corefx  coreb from the core to core_fx, in place (an effect's loading
+; lines: payload.asm's fxd, tools/c64build.py's fx_patch): past the
+; effect's 3rd byte moved up 5, then the (gap, xor) pairs; corefxd back
+; (the pairs again, then down 5)
+;   uses: a, x, y, t0, t1, p1-p3
+; ------------------------------------------------------------
+corefxs byte 0                  ; coreb: 0 the core, 1 core_fx
+corefx  lda corefxs
+        bne @x
+        inc corefxs
+        ldx #24
+        jsr cmvup
+        lda #0                  ; (the 5 bytes made: as the pairs have them)
+        ldx #4
+@z      sta coreb+cfxp+3,x
+        dex
+        bpl @z
+        jmp fxflip
+@x      rts
+corefxd lda corefxs
+        beq @x
+        dec corefxs
+        jsr fxflip
+        ldx #30
+        jsr cmv
+        jsr mvdn
+        lda #0                  ; (the 5 past it: zero, as corecp left them)
+        ldx #4
+@z      sta coreb+corelen,x
+        dex
+        bpl @z
+@x      rts
+; fxflip: each pair of fxd: on by its gap, xor its byte
+fxflip  lda #<coreb
+        sta p1
+        lda #>coreb
+        sta p1+1
+        lda #<fxd
+        sta p3
+        lda #>fxd
+        sta p3+1
+        lda #<nfx2
+        sta t0
+        lda #>nfx2
+        sta t1
+@l      ldy #0
+        lda (p3),y              ; the gap
+        clc
+        adc p1
+        sta p1
+        bcc @g
+        inc p1+1
+@g      iny
+        lda (p3),y              ; the xor
+        dey
+        eor (p1),y
+        sta (p1),y
+        lda p3
+        clc
+        adc #2
+        sta p3
+        bcc @c
+        inc p3+1
+@c      lda t0
+        sec
+        sbc #2
+        sta t0
+        bcs @t
+        dec t1
+@t      ora t1
+        bne @l
+        rts
+
+; fxset  coreb (core_fx) set for the effect opt_fx: its 8 bytes (its
+; value, for and, ora and eor), the colour it starts from, its stores'
+; opcodes on and off, and their places (slopload.py's stripe_fx)
+;   uses: a, x, y
+fxset   lda opt_fxb             ; the effect and its colour: opt_fx's, or
+        sta fxcol               ; the plain one (one colour with the cycle)
+        lda opt_fx
+        ldx opt_lines
+        cpx #st_fx
+        beq @e
+        jsr flatcol
+        sta fxcol
+        lda #fxplain
+@e      sta fxi
+        asl a
+        asl a
+        asl a
+        tax
+        ldy #0
+@c      lda fxtpl,x
+        sta coreb+cfxp,y
+        inx
+        iny
+        cpy #8
+        bcc @c
+        lda opt_cyc             ; -cycle: inc $d020 at each page
+        beq @nc
+        lda #$ee
+        sta coreb+cfxcyc
+        lda #$20
+        sta coreb+cfxcyc+1
+        lda #$d0
+        sta coreb+cfxcyc+2
+@nc     ldx fxi
+        lda fxval,x
+        beq @nv
+        lda opt_fxn
+        sta coreb+cfxp+4
+@nv     lda fxcol
+        sta coreb+cfxbc
+        lda fxpa,x
+        clc
+        adc #cfxslo
+        sta coreb+cfxs
+        lda fxpb,x
+        clc
+        adc #cfxslo
+        sta coreb+cfxs2
+        lda fxa1v,x
+        sta coreb+cfxa1
+        lda fxb1v,x
+        sta coreb+cfxb1
+        lda fxa0v,x
+        sta coreb+cfxa0
+        lda fxb0v,x
+        sta coreb+cfxb0
+        rts
+fxi     byte 0                  ; the effect (fxplain: the plain one)
+fxcol   byte 0                  ; ... the colour it starts from
 
 ; c2fix  core_stripes' moved bytes: a = 0 adds each delta, $ff takes it
 ; off (as the delta eor $ff, plus 1); each a byte, its gap from the last
@@ -770,10 +1016,16 @@ mvdn    lda t0
 @x      rts
 
 ; stcol  style y's colour for timer value a (0-11): rainbow (0) the value
-; itself, else its list's (a / 2 mod its length)
+; itself, else its list's (a / 2 mod its length; st_own: ownl)
 ;   uses: a, y, p3 (keeps x)
 stcol   cpy #0
         beq @x
+        cpy #st_fx              ; (an effect: the colour it starts from)
+        bne @nf
+        lda opt_fxb
+        rts
+@nf     cpy #st_own             ; (your own: its list)
+        beq @own
         cpy #st_block           ; (a colour a block: shown as 0, 1, 2 ...;
         bcc @t                  ; one colour: that one)
         bne @one
@@ -781,12 +1033,18 @@ stcol   cpy #0
         rts
 @one    lda opt_fcol
         rts
+@own    lsr a
+        pha
+        lda #<ownl
+        sta p3
+        lda #>ownl
+        bne @p
 @t      lsr a
         pha
         lda stclo,y
         sta p3
         lda stchi,y
-        sta p3+1
+@p      sta p3+1
         pla
         ldy #0
 @m      cmp (p3),y
@@ -800,7 +1058,8 @@ stcol   cpy #0
 
 ; ------------------------------------------------------------
 ; mkhead  the KERNAL header (type, stage 1's start, $0304, the name,
-; stage 1's header part, spaces) and stage 1's data block
+; stage 1's header part, spaces) and stage 1's data block (pl_s1blk,
+; patched where it is: both bytes set for every tape)
 ; ------------------------------------------------------------
 mkhead  lda #3
         sta header
@@ -833,38 +1092,35 @@ mkhead  lda #3
         sta header+21,x
         inx
         bne @f
-@b      ldx #0
-@bc     lda pl_s1blk,x
-        sta s1blk,x
-        inx
-        cpx #s1blklen
-        bcc @bc
-        lda #4
-        sta s1blk+s1pages
+@b      lda #4
+        sta pl_s1blk+s1pages
+        ldx #$8e                ; stx $d020: stripes
         lda opt_lines           ; a style: stage 1 at one colour (no stripes
-        beq @r                  ; before the core's)
-        lda #$2c                ; bit $d020
-        sta s1blk+cs1str
+        beq @st                 ; before the core's)
+        ldx #$2c                ; bit $d020
+@st     stx pl_s1blk+cs1str
+        lda opt_lines
+        beq @r
         jsr s1col
         sta header+21+cs1bc
 @r      rts
 
 ; ------------------------------------------------------------
-; romexp192 / romexp58  a KERNAL block (the header at x/y / stage 1's
-; block) as 2-bit symbols at p1 (S 0, M 1, L 2): the countdown from a
-; ($89 or $09), the bytes, their check, L S and two more S
+; romexp192 / romexps1  a KERNAL block (the header at x/y / stage 1's
+; block, s1blklen bytes) as 2-bit symbols at p1 (S 0, M 1, L 2): the
+; countdown from a ($89 or $09), the bytes, their check, L S and two more S
 ; ------------------------------------------------------------
 romexp192
         stx p2
         sty p2+1
         ldx #192
         bne romexp
-romexp58
-        ldx #<s1blk
+romexps1
+        ldx #<pl_s1blk
         stx p2
-        ldx #>s1blk
+        ldx #>pl_s1blk
         stx p2+1
-        ldx #58
+        ldx #s1blklen
 romexp  stx t5                  ; bytes
         sta t4                  ; the countdown
         lda #0
@@ -1249,7 +1505,10 @@ getblk  lda #$ff                ; (a block read: pfxs isn't its symbols)
         lda bsrc,x
         cmp #1
         beq @disk
-        lda bpl,x               ; from memory (the high pool too: all RAM)
+        cmp #3                  ; (a chain's second module: its file)
+        bne @mem
+        jmp readb
+@mem    lda bpl,x               ; from memory (the high pool too: all RAM)
         sta p2
         lda bph,x
         sta p2+1

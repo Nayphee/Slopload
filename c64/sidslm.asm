@@ -86,6 +86,7 @@ cutcalls = 15000                ; ... a cut's (five minutes, as the PC's)
         jmp main
 
         incasm "io.asm"
+prch = chrout                   ; (print's character: no words packed here)
         incasm "disk.asm"
         incasm "wfile.asm"
         incasm "machine.asm"

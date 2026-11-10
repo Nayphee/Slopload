@@ -33,8 +33,10 @@ d018v = $f4                     ; screen $3c00 into the bank, characters $1000 (
 ; ---- the standard parts ----
 g_claim = modend                ; end of the memory claimed
 g_jitter = 49                   ; measured: tests/jitter.py --module ozgold (pal 48, ntsc 49)
-fstep = 8                       ; the fade: ticks a volume step (16 x 8: 2.6 s,
-                                ; as PETSCII-Load's)
+g_border = 1                    ; it leaves the border to the loader (gk_bord)
+g_sfx = 0                       ; no sound effects: the music keeps all three voices
+g_wait = 1                      ; with -wait it holds at 000 until SPACE (then the fade)
+g_count = 0                     ; (no status line: its own counter, always)
 g_share = 60                    ; the most of the cpu (%) the loader may take
 gk_barhalf = 0                  ; (the kit's status line: not used, the
 gk_srow = 21*40                 ; counter is the status)
@@ -92,9 +94,9 @@ init    jsr gk_musinit          ; the header's music (a tune the tool chose)
         lda #>oz_init
         sta minit+2
         lda #<oz_play
-        sta mplay+1
+        sta mplayr+1
         lda #>oz_play
-        sta mplay+2
+        sta mplayr+2
         lda #2                  ; (a sid tune: every voice)
         sta mflags
         lda #1                  ; (it sets $d418 at its init only, filter
@@ -109,7 +111,7 @@ init    jsr gk_musinit          ; the header's music (a tune the tool chose)
         dex
         bpl @z
         sta $d015               ; no sprites
-        sta $d020               ; black border
+        jsr gk_bord             ; black border
         sta dbg_space
         sta dbg_auto
         lda #6
@@ -200,12 +202,33 @@ vbwait
 @x      rts
 
 ; ------------------------------------------------------------
-; tick  the music; once loaded, the fade (then the program starts)
+; tick  the music; once loaded, the fade (then the program starts).
+; With -wait (header +28 bit 1) it holds at 000 first, the music on,
+; until SPACE
 ; ------------------------------------------------------------
 tick    inc frm
         bit ld_state
         bpl @p
-        jmp fade
+        lda gk_opt
+        and #2
+        beq @f                  ; no -wait (or SPACE pressed): the fade
+        jsr startkey            ; SPACE: exitreq
+        lda exitreq
+        bne @go
+        ldx #tx_waitend-tx_wait-1 ; PRESS SPACE on the tape error's row
+@pw     lda tx_wait,x
+        sta scr+o_errrow+14,x
+        lda #1                  ; white
+        sta $d800+o_errrow+14,x
+        dex
+        bpl @pw
+        jmp @p
+@go     lda #0                  ; (exitreq is the fade's end)
+        sta exitreq
+        lda gk_opt                ; the hold over
+        and #$fd
+        sta gk_opt
+@f      jmp fade
 @p      jsr soundkey
         lda musicon
         beq @x
@@ -304,8 +327,11 @@ tx_loading
 tx_loaded
 tx_error
         byte 0
+tx_wait byte $10,$12,$05,$13,$13,$20,$13,$10,$01,$03,$05 ; PRESS SPACE (screen codes)
+tx_waitend
 
         incasm "modkit.asm"
+        incasm "modinit.asm"
         incasm "colours.asm"
         incasm "music.asm"      ; the tune, on its own page
         incasm "fadekit.asm"    ; (after it: no page to keep to)

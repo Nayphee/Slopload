@@ -23,7 +23,7 @@ init    jsr gk_musinit          ; the music's addresses from the header
 @zc     sta $10,x
 @zn     dex
         bpl @z
-        sta $d020               ; (a 0)
+        jsr gk_bord             ; (a 0)
         sta $d021
         lda #$0b
         sta $d011
@@ -102,3 +102,6 @@ clrall  ldx #0
         bne @c
         rts
 
+; the kit's routines that only init calls: here, drawn over once init
+; has run (they used to fill the low part)
+        incasm "modinit.asm"

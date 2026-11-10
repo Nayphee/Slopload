@@ -41,6 +41,10 @@
 ; ---- the standard parts (src/modhead.asm, src/modkit.asm) ----
 g_claim = bssend                ; end of the memory claimed (variables too)
 g_jitter = 48                   ; worst edge timing jitter (tests/jitter.py)
+g_border = 1                    ; it leaves the border to the loader (gk_bord)
+g_sfx = 1                       ; it makes effects on voice 3 (beside SlopLoad's player)
+g_wait = 1                      ; with -wait it plays on until SPACE or a game's end (the kit's)
+g_count = 1                     ; with -countdown its status line counts blocks (the kit's)
 g_share = 35                    ; the most of the cpu (%) the loader may take
 gk_barhalf = 1                  ; the status bar: 5 characters, 2 px a step
 gk_srow = 2*40                  ; the status line: row 2
@@ -166,7 +170,8 @@ ej0 = $6c                       ; ... and its lane
 dbg_space = $8e                 ; debug: non-zero presses space once loaded
 dbg_auto = $8f                  ; debug: non-zero plays by itself
 
-*=$caea                         ; (just past the built-in music's workspace)
+*=$c94f                         ; (past $c000-$c94e: SlopLoad's player there, the effects beside it;
+                                ; the low part ends at $cfe8 as before, the fade in it too)
 lowpart                         ; (a second part: tools/build.py splits it off)
         incasm "low.asm"
 lowend
@@ -309,9 +314,7 @@ frame
 @tick   jsr tick
 @held   jsr status
         jsr bgtail              ; time left: more of the hidden buffer
-        lda exitreq
-        cmp #1
-        rts
+        jmp gk_exit             ; (c set: end, the music faded out first)
 
 d018s   byte d018a,d018b
 henlate byte 250,200            ; the hen's block left for the next tick
@@ -421,13 +424,8 @@ tick    inc frm
         lda st
         bne t_play              ; (else: the title, next)
 
-; ---- title: the hen waits; fire hops; once the program is in, a
-; player who hasn't started gets it straight away ----
-t_title bit ld_state
-        bpl @wait
-        lda #1
-        sta exitreq
-@wait   jsr lanedraw
+; ---- title: the hen waits; fire hops ----
+t_title jsr lanedraw
         lda fpress
         beq @x
         lda #st_play
@@ -464,13 +462,10 @@ t_dead  lda tmr
         jsr setmsg
 @x      jmp henpos
 
-; ---- game over: once loaded, the program starts; before, a
-; lockout, then fire plays again ----
-t_over  bit ld_state
-        bpl @nl
-        lda #1
-        sta exitreq
-@nl     lda tmr                 ; (everything still: the hen as she was)
+; ---- game over: once loaded, the program starts (gk_done: with -wait,
+; the end of a game); before, a lockout, then fire plays again ----
+t_over  jsr gk_done
+        lda tmr                 ; (everything still: the hen as she was)
         cmp #lockout
         bcc @x
         bne @ready

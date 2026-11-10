@@ -57,20 +57,28 @@
 ; The fade is the kit's (src/fadekit.asm, OZ GOLD's too).
 ;
 ; Memory: $bc00-$bfe7 and $e000 to modend (and the font's part, if
-; there is one: $b000 or $b800 on). Zero page $10-$2f.
+; there is one: $b000 or $b800 on). Zero page $10-$2f. In a chain
+; (slopload.py -then, petscii.py -chain) the main part is at $a000
+; (petbase), clear of a picture module's $c000-$ffbf.
 ; ------------------------------------------------------------
         incasm "abi.asm"
 
 ; ---- memory ----
+petbase = $e000                 ; the main part (tools/petscii.py: $a000 in a chain,
+                                ; clear of a picture's $c000-$ffbf)
 scr = $bc00                     ; the screen: vic bank 2, beside the rom font
+lowat = scr                     ; (its part: the chain's build, at $a000, puts a
+                                ; copy lower, to assemble in order, and keeps $bc00's)
 scra = scr                      ; (the kit's names for it)
 scrb = scr
 
 ; ---- the standard parts (g_share: colours.asm, as the settings) ----
 g_claim = modend                ; end of the memory claimed
 g_jitter = 49                   ; measured: tests/jitter.py --module petscii (48)
-fstep = 8                       ; the fade: ticks a volume step (16 x 8: 2.6
-                                ; seconds; no music, 000 for 1.3)
+g_border = 1                    ; it leaves the border to the loader (gk_bord)
+g_sfx = 0                       ; no sound effects: the music keeps all three voices
+g_wait = 1                      ; with -wait it holds at 000 until SPACE (then the fade)
+g_count = 0                     ; (no status line: its own counter, always)
 gk_barhalf = 0                  ; (the kit's status line: not used)
 gk_srow = 24*40
 
@@ -115,15 +123,15 @@ c_pct = $25
 ; ------------------------------------------------------------
 ; the second part: the screen, where the vic shows it
 ; ------------------------------------------------------------
-*=$bc00
+*=lowat
 lowpart
         incasm "screen.asm"
 lowend
 
-*=$e000
+*=petbase
 mainpart
         incasm "modhead.asm"
-*=$e020                         ; (the header is 32 bytes)
+*=petbase+32                    ; (the header is 32 bytes)
         incasm "colours.asm"    ; +32 the settings, +36 the colours, +1036 the rest
 
 ; ------------------------------------------------------------
@@ -143,7 +151,7 @@ init    jsr gk_musinit          ; the header's music (the tool's choice)
         sta dbg_auto
         lda pborder
         and #15
-        sta $d020
+        jsr gk_bord
         lda #2                  ; a tape error: red, or white on a red border
         cmp $d020
         bne @e
@@ -293,6 +301,9 @@ stop    lda musicon
 frame   jsr vbwait
 @vb     lda #$1b                ; screen on, 25 rows
         sta $d011
+        lda #$20                ; (the loader's: -showstripes)
+        bit ld_state
+        bne @nb
         lda pborder             ; the border: the screen's, or the error's,
         bit ld_state            ; written only when it changes (on a newer
         bvc @b                  ; VIC-II, 8565, a write to a colour register
@@ -387,12 +398,26 @@ tickt   lda ld_state
         rts
 
 ; ------------------------------------------------------------
-; tick  the music; once loaded, the fade (then the program starts)
+; tick  the music; once loaded, the fade (then the program starts).
+; With -wait (header +28 bit 1) it holds at 000 first, the music on,
+; until SPACE
 ; ------------------------------------------------------------
 tick    inc frm
         bit ld_state
         bpl @p
-        jmp fade
+        lda gk_opt
+        and #2
+        beq @f                  ; no -wait (or SPACE pressed): the fade
+        jsr startkey            ; SPACE: exitreq
+        lda exitreq
+        bne @go
+        jmp @p
+@go     lda #0                  ; (exitreq is the fade's end)
+        sta exitreq
+        lda gk_opt                ; the hold over
+        and #$fd
+        sta gk_opt
+@f      jmp fade
 @p      jsr soundkey
         lda musicon
         beq @x
@@ -446,11 +471,16 @@ step    lda xs
 
 ; ------------------------------------------------------------
 ; count  the blocks left: the program's blocks (header +26) less its
-; share loaded, 000 once it is in (the digits from pdigit0 on)
+; share loaded, 000 once it is in, or the progress at its top ($ff: in
+; a chain, the next module's last page or two; the digits from pdigit0
+; on)
 ;   uses: a, x, y, tmp, tmp2
 ; ------------------------------------------------------------
 count   lda ld_state
         bmi @none
+        lda ld_progress
+        cmp #$ff
+        beq @none
         lda hblocks
         bne @b
         lda #100                ; (no size in the header: 100 down)
@@ -518,6 +548,7 @@ tx_error
         byte 0
 
         incasm "modkit.asm"
+        incasm "modinit.asm"
         incasm "fadekit.asm"
 msgdata                         ; the message: the tools put theirs here
         incasm "message.asm"

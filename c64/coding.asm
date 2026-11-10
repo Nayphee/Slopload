@@ -211,6 +211,7 @@ secblk  ldx blk                 ; its tables: set 4 and its own, at its h
 @x      rts
 tabA    byte 0
 tabB    byte 0
+cph     byte 0                  ; choose: 1 for a chain's second module's block
 
 ; blkpil  block blk's pilot: a/x its length's table, t7 its quantum
 blkpil  ldx blk
@@ -748,19 +749,43 @@ choose  ldx blk                 ; nbody = n + 2 (pad, check)
         sta nbody+1
         lda #0                  ; (every pulse 208 cycles or more; 212 with
         sta hlo                 ; a style's colour lookup, the screen on)
+        lda bset,x              ; (bit 1: a chain's second module, at the
+        and #2                  ; first's jitter and share: mdjit+1, mdshr+1)
+        lsr a
+        sta cph
         lda bset,x              ; the least h, and the share (0: none)
         and #1
         beq @boot
         ldx opt_speed           ; the module's: with the screen on, the
         lda mdscr               ; speed's h + its jitter rounded up to 4
         beq @off                ; (124 at most); off, as at boot
-        jsr flatcol             ; (a table style's lookup: 4 cycles more)
-        bcs @n4
-        lda opt_lines
+        jsr fxon                ; (core_fx: the effect's cost, the cycle's 3)
+        bcs @fx
+        jsr flatcol             ; (a table style's lookup: 4 cycles more,
+        bcs @n4                 ; an effect's 6-10: every pulse 212 or 218;
+        lda opt_lines           ; 1-8 more is 212's sets, 9-16 218's)
         beq @n4
         lda #6
-        sta hlo
-@n4     lda mdjit
+        bne @h6
+@fx     lda opt_lines
+        cmp #st_fx
+        lda #0                  ; (the plain one: 0)
+        bcc @pc
+        ldy opt_fx
+        lda fxcost,y
+@pc     ldy opt_cyc
+        beq @c3
+        clc
+        adc #3
+@c3     cmp #1
+        bcc @n4
+        cmp #9
+        lda #6
+        bcc @h6
+        lda #12
+@h6     sta hlo
+@n4     ldy cph
+        lda mdjit,y
         clc
         adc #3
         and #$fc
@@ -773,7 +798,8 @@ choose  ldx blk                 ; nbody = n + 2 (pad, check)
         bne @l2
 @off    lda hminb,x
 @l2     sta hmin
-        lda mdshr
+        ldy cph
+        lda mdshr,y
         sta share
         jmp @b
 @boot   ldx opt_speed
@@ -853,8 +879,9 @@ tx_noset text "no coding fits the module's share",13,0
 lm      byte 2,3,4,2,3,4
 lp      byte 0,0,0,1,1,1
 hlow    byte 104,72,52,104,72,52    ; (208 cycles)
-        byte 108,72,56,108,72,56    ; (212)
-hlo     byte 0                  ; 0, or 6: the second row
+        byte 108,72,56,108,72,56    ; (212, and 216: an effect of 6 or 8 cycles)
+        byte 112,76,56,112,76,56    ; (218: one of 10)
+hlo     byte 0                  ; 0, 6 or 12: the second row or the third
 lh      byte 0,0,0,0,0,0        ; the head's h (past 124: done)
 lb0     byte 0,0,0,0,0,0        ; base (24-bit)
 lb1     byte 0,0,0,0,0,0

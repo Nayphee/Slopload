@@ -274,3 +274,5 @@ copyrow tax
 
         incasm "modkit.asm"
         incasm "tables.asm"
+        incasm "fadekit.asm"    ; (every module's tune fades out at the end)
+        incasm "fadescr.asm"

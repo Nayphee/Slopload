@@ -27,7 +27,9 @@ def main():
     if not os.path.exists(SID):
         sys.exit(f"ozgold: no tune ({SID}): the music's build makes it")
     sha = hashlib.sha256(open(SID, 'rb').read()).hexdigest()
-    first = f"; from music/build/ozgold.sid, sha256 {sha}, page ${PAGE:02x}"
+    tools = hashlib.sha256(b''.join(open(os.path.join(ROOT, 'tools', f), 'rb').read()
+                                    for f in ('sidstrip.py', 'sidfile.py', 'sidreloc.py'))).hexdigest()[:16]
+    first = f"; from music/build/ozgold.sid, sha256 {sha}, page ${PAGE:02x}, moved by tools {tools}"
     if os.path.exists(OUT) and open(OUT).readline().strip() == first:
         return 0
     import sidstrip as SS
