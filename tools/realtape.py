@@ -20,7 +20,6 @@ Lengths are kept relative to the quantum h, since the loader measures h
 again on every block's pilot: a deck that runs 3% fast just looks like
 a slightly different h.
 """
-import json
 import math
 import random
 

@@ -5,7 +5,7 @@ module (modules/petscii, PETSCII-Load).
 
     petscii.py SCREEN OUT.lm [-screen N] [-font FONT.64c] [-scroll TEXT]
                [-scrollrow N] [-scrollspeed N] [-scrollcolours HEX]
-               [-counter ROW,COL] [-chain]  the module, for SlopLoad 64
+               [-counter ROW,COL] [-screech] [-chain]  the module, for SlopLoad 64
     petscii.py SCREEN -info [-screen N]     what the file holds
 
 -font FONT.64c   the screen in a font of its own: a .64c file (as Petmate
@@ -29,6 +29,9 @@ module (modules/petscii, PETSCII-Load).
 -counter ROW,COL a block counter: three digits there (in the screen's
                  colours) counting the program's blocks down to 000 (first
                  in a chain: the next module's blocks)
+-screech         Novaload's loading noise: with no tune, voice 1 a sawtooth
+                 whose pitch is each byte of the program as it loads (a
+                 tune, if the tape has one, plays instead)
 -chain           the module's main part at $A000, not $E000: for a chain
                  (slopload.py -module A -then B), where the other module,
                  a picture's, is at $C000-$FFBF (the PC tool does this by
@@ -53,7 +56,7 @@ The module (modules/petscii, built by tools/build.py) is the template:
 its second part at $BC00 is the screen codes; its main part has, from
 byte 32 on (just after the header), the border, the background, the
 $D018 value ($F4 upper case, $F6 lower case), the flags (bit 0 the
-counter, bit 1 the scroller), the 1,000 colours, then (byte 1036) the
+counter, bit 1 the scroller, bit 2 the screech), the 1,000 colours, then (byte 1036) the
 scroller's row and speed, the counter's place (row x 40 + column) and
 the message's length (words), the code, and the message at its end.
 Then (byte 1042) the space's code (the scroller's row is cleared with
@@ -336,7 +339,8 @@ def font_part(codes, msg=b'', counter=False, font=b''):
             {c: i for i, c in enumerate(order)}, FONT_D018[small])
 
 
-def module(scr, msg=b'', row=24, speed=2, counter=None, notes=None, colours=None, chain=False):
+def module(scr, msg=b'', row=24, speed=2, counter=None, notes=None, colours=None, chain=False,
+           screech=False):
     """the module with this screen in it, and a scrolling message (screen
     codes) and a counter (row, column) if given: [(address, bytes)], the
     main part first, then a font of its own (font_part) if it has one,
@@ -344,7 +348,7 @@ def module(scr, msg=b'', row=24, speed=2, counter=None, notes=None, colours=None
     columns 1-39 (39 of them) instead of the screen's. The rows next to
     the message are cleared (clear_next); notes, a list, gets what was
     cleared and the font's characters. chain: the main part at $A000
-    (template)"""
+    (template). screech: Novaload's loading noise (the flags' bit 2)"""
     check(scr, msg, row, speed, counter, colours)
     if msg:
         was = scr
@@ -365,7 +369,7 @@ def module(scr, msg=b'', row=24, speed=2, counter=None, notes=None, colours=None
             notes.append(f"{scr['name']}: its own font ({scr['fontname']}), cut to the {len(fd) // 8}"
                          f" characters it shows: ${fa:04X}-${fa + len(fd) - 1:04X}")
     md = bytearray(md[:code]) + bytes(msg)
-    flags = (1 if counter else 0) | (2 if msg else 0)
+    flags = (1 if counter else 0) | (2 if msg else 0) | (4 if screech else 0)
     md[SET_AT:SET_AT + 4] = bytes([scr['border'], scr['bg'], d018, flags])
     md[COL_AT:COL_AT + W * H] = scr['colours']
     if colours is not None:                             # (the row's colour memory: it stays put)
@@ -430,7 +434,7 @@ def options(o, scr):
         except ValueError:
             raise Bad(f"{k} needs a number, not {o[k]!r}")
     return dict(msg=msg, row=num('-scrollrow', 24), speed=num('-scrollspeed', 2), counter=counter,
-                colours=colours)
+                colours=colours, screech=bool(o.get('-screech')))
 
 
 def main(argv):
@@ -441,7 +445,8 @@ def main(argv):
            '-counter': None, '-font': None}
     rest = []
     chain = '-chain' in argv
-    argv = [a for a in argv if a != '-chain']
+    opt['-screech'] = '-screech' in argv
+    argv = [a for a in argv if a not in ('-chain', '-screech')]
     i = 0
     while i < len(argv):
         if argv[i] in opt and i + 1 < len(argv):

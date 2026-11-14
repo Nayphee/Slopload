@@ -458,10 +458,13 @@ cinit   sei
         jsr g_init
 
 ; ---- game phase ----
-@gl     lda bdst+2              ; the store moved to a new page: the
-        cmp ld_pages            ; progress moves on (kept out of the
-        beq @gf                 ; interrupt, whose longest path must
-        inc ld_pages            ; fit in the shortest pulse)
+@gl     lda ld_pages            ; the store moved to a new page: the
+        cmp bdst+2              ; progress moves on (kept out of the
+        bcs @gf                 ; interrupt, whose longest path must
+        inc ld_pages            ; fit in the shortest pulse; ld_pages read
+                                ; first and only ever behind: a header
+                                ; between the two reads set both, and one
+                                ; step too many then ran on a step a frame)
         lda pfrac
         clc
         adc pt_step
@@ -578,7 +581,8 @@ xstubend
 ; ------------------------------------------------------------
 ; mrec  measuring build only (tools/build.py enables the lines
 ; starting ";measure"): the time between this edge and the last,
-; low byte, from cia1 timer b, into a buffer at $4000-$bfff.
+; low byte, from cia1 timer b, into a buffer at $4000-$b7ff (a ring:
+; the music first's player sits from $b800).
 ; tests/jitter.py compares it with the pulses on the tape.
 ;   uses: a
 ; ------------------------------------------------------------
@@ -594,7 +598,7 @@ xstubend
 ;measure        bne @x
 ;measure        inc mptr+2
 ;measure        lda mptr+2
-;measure        cmp #$c0
+;measure        cmp #$b8
 ;measure        bne @x
 ;measure        lda #$40
 ;measure        sta mptr+2

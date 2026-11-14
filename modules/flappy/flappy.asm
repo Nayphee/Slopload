@@ -34,6 +34,7 @@ g_border = 1                    ; it leaves the border to the loader (gk_bord)
 g_sfx = 1                       ; it makes effects on voice 3 (beside SlopLoad's player)
 g_wait = 1                      ; with -wait it plays on until SPACE or a game's end (the kit's)
 g_count = 1                     ; with -countdown its status line counts blocks (the kit's)
+g_end = 1                       ; with -waitgame it plays on until a game ends (gk_done)
 g_share = 35                    ; the most of the cpu (%) the loader may take
 gk_barhalf = 0                  ; the status bar: 9 characters, 1 px a step
 gk_srow = 24*40                 ; the status line: row 24
@@ -146,10 +147,123 @@ spc = $8b                       ; 1: space held (start key)
 dbg_space = $8e                 ; debug: non-zero presses space once loaded
 dbg_auto = $8f                  ; debug: non-zero plays by itself
 
-*=$ce80                         ; the fade (every module's tune fades out at the
-lowpart                         ; end) and its scratch: a second part, past
-        incasm "fadekit.asm"    ; SlopLoad's player at $c000 (tools/build.py
-        incasm "fadescr.asm"    ; splits it off)
+*=$cd90                         ; the fade (every module's tune fades out at the
+lowpart                         ; end) and its scratch, the effects, drawall: a second
+        incasm "fadekit.asm"    ; part, past SlopLoad's player at $c000
+        incasm "fadescr.asm"    ; (tools/build.py splits it off)
+
+; effects: a = 1 flap, 2 point, 3 hit; a lower one doesn't cut a
+; higher one short
+sfxflap lda #1
+        bne sfxgo
+sfxpoint
+        lda #2
+        bne sfxgo
+sfxhit  lda #3
+sfxgo   ldx mflags
+        cpx #2
+        beq @x                  ; a sid tune has every voice: no effects
+        ldx sfxtime
+        beq @go
+        cmp sfxprio
+        bcc @x
+@go     sta sfxprio
+        tax
+        lda #0
+        sta $d412               ; restart the envelope
+        sta $d40e
+        sta $d414
+        lda sfxhi-1,x
+        sta $d40f
+        lda sfxad-1,x
+        sta $d413
+        lda sfxlen-1,x
+        sta sfxtime
+        lda sfxwave-1,x
+        sta $d412
+@x      rts
+
+sfxhi   byte $30,$45,$06
+sfxad   byte $08,$09,$0a
+sfxlen  byte 3,6,4
+sfxwave byte $81,$41,$81
+
+; gate off when the effect's time is up; the point sound steps up
+sfxtick lda sfxtime
+        beq @x
+        dec sfxtime
+        bne @s
+        ldx sfxprio
+        lda sfxwave-1,x
+        and #$fe
+        sta $d412
+        lda #0
+        sta sfxprio
+@x      rts
+@s      lda sfxprio
+        cmp #2
+        bne @x
+        lda sfxtime
+        cmp #3
+        bne @x
+        lda #$5c
+        sta $d40f
+        rts
+
+; ------------------------------------------------------------
+; drawall  both screens and colour ram from scratch (screen off)
+; ------------------------------------------------------------
+drawall ldx #0
+@sky    lda #c_sky
+        sta scra,x
+        sta scra+$100,x
+        sta scra+$200,x
+        sta scrb,x
+        sta scrb+$100,x
+        sta scrb+$200,x
+        lda #col_green
+        sta $d800,x
+        sta $d900,x
+        sta $da00,x
+        inx
+        beq @d
+        txa                     ; (a tune playing on keeps time: a call
+        and #$3f                ; every 64 bytes, gk_keep)
+        bne @sky
+        jsr gk_keep
+        jmp @sky
+@d      jsr gk_keep
+        ldx #0
+@low    lda #c_sky              ; to $..e7: rows 19.2-24
+        sta scra+$300,x
+        sta scrb+$300,x
+        lda #col_green
+        sta $db00,x
+        inx
+        cpx #$e8
+        bne @low
+        ldx #39
+@g      lda #c_grass
+        sta scra+800,x
+        sta scrb+800,x
+        lda #c_dirt
+        sta scra+840,x
+        sta scrb+840,x
+        lda #c_dirte
+        sta scra+880,x
+        sta scrb+880,x
+        lda #col_yellow+8
+        sta $d800+840,x
+        sta $d800+880,x
+        lda #col_text
+        sta $d800+920,x
+        sta $d800+960,x
+        dex
+        bpl @g
+        lda #$ff
+        sta smode
+        rts
+
 lowend
 
 *=$e000
@@ -200,7 +314,9 @@ init    jsr gk_musinit          ; before the bird's characters (2-3) are
         sta rnd+1
         jsr sidinit
         jsr musicgo
-        jsr drawall
+        jsr gk_keep             ; (a tune playing on keeps time while this
+        jsr drawall             ; draws: at least once a frame, gk_keep)
+        jsr gk_keep
         lda #$ff
         sta smode
         lda #64                 ; the bird's first block, in buffer a
@@ -211,9 +327,14 @@ init    jsr gk_musinit          ; before the bird's characters (2-3) are
         sta bset                ; so the first one drawn is set 0
         lda #1
         sta bfrm
+        jsr gk_keep
         jsr birdpos
+        jsr gk_keep
         jsr adopt
-        jmp newround
+        jsr gk_keep
+        lda musicon             ; (the first frame plays the tune, if one
+        sta mdue                ; plays: a tune playing on, a frame after
+        jmp newround            ; gk_kend's)
 
 ; ------------------------------------------------------------
 ; stop  silence; the core blanks the screen after
@@ -756,7 +877,12 @@ fall    lda vyl
 @ok     sta byh
         rts
 
-die     lda #st_dead
+die     lda byh                 ; (a fall may end below the grass: the block then
+        cmp #birdmax            ; took row 21's dirt, and its colour for good)
+        bcc @up
+        lda #birdmax
+        sta byh
+@up     lda #st_dead
         sta st
         lda #0
         sta tmr
@@ -1119,7 +1245,8 @@ newround
         sta pt
         bcc @n
         inc pt+1
-@n      lda #c_sky
+@n      jsr gk_keep             ; (init's: a tune playing on keeps time)
+        lda #c_sky
         dex
         bne @c
         ldx #<tx_title
@@ -1134,58 +1261,12 @@ newround
         ldy #>tx_again
         lda #txr3
         jsr span
+        jsr gk_keep
         lda #64
         sta byh
         jsr wings
-        jmp birdpos
-
-; ------------------------------------------------------------
-; drawall  both screens and colour ram from scratch (screen off)
-; ------------------------------------------------------------
-drawall ldx #0
-@sky    lda #c_sky
-        sta scra,x
-        sta scra+$100,x
-        sta scra+$200,x
-        sta scrb,x
-        sta scrb+$100,x
-        sta scrb+$200,x
-        lda #col_green
-        sta $d800,x
-        sta $d900,x
-        sta $da00,x
-        inx
-        bne @sky
-        ldx #0
-@low    lda #c_sky              ; to $..e7: rows 19.2-24
-        sta scra+$300,x
-        sta scrb+$300,x
-        lda #col_green
-        sta $db00,x
-        inx
-        cpx #$e8
-        bne @low
-        ldx #39
-@g      lda #c_grass
-        sta scra+800,x
-        sta scrb+800,x
-        lda #c_dirt
-        sta scra+840,x
-        sta scrb+840,x
-        lda #c_dirte
-        sta scra+880,x
-        sta scrb+880,x
-        lda #col_yellow+8
-        sta $d800+840,x
-        sta $d800+880,x
-        lda #col_text
-        sta $d800+920,x
-        sta $d800+960,x
-        dex
-        bpl @g
-        lda #$ff
-        sta smode
-        rts
+        jsr birdpos
+        jmp gk_kend             ; (init's: a tune playing on, a play call just now)
 
 ; ------------------------------------------------------------
 ; span  a message, centred in its 12-cell span, hi-res white: only
@@ -1330,64 +1411,6 @@ bcd3    sta tmp
         inx
         rts
 
-; effects: a = 1 flap, 2 point, 3 hit; a lower one doesn't cut a
-; higher one short
-sfxflap lda #1
-        bne sfxgo
-sfxpoint
-        lda #2
-        bne sfxgo
-sfxhit  lda #3
-sfxgo   ldx mflags
-        cpx #2
-        beq @x                  ; a sid tune has every voice: no effects
-        ldx sfxtime
-        beq @go
-        cmp sfxprio
-        bcc @x
-@go     sta sfxprio
-        tax
-        lda #0
-        sta $d412               ; restart the envelope
-        sta $d40e
-        sta $d414
-        lda sfxhi-1,x
-        sta $d40f
-        lda sfxad-1,x
-        sta $d413
-        lda sfxlen-1,x
-        sta sfxtime
-        lda sfxwave-1,x
-        sta $d412
-@x      rts
-
-sfxhi   byte $30,$45,$06
-sfxad   byte $08,$09,$0a
-sfxlen  byte 3,6,4
-sfxwave byte $81,$41,$81
-
-; gate off when the effect's time is up; the point sound steps up
-sfxtick lda sfxtime
-        beq @x
-        dec sfxtime
-        bne @s
-        ldx sfxprio
-        lda sfxwave-1,x
-        and #$fe
-        sta $d412
-        lda #0
-        sta sfxprio
-@x      rts
-@s      lda sfxprio
-        cmp #2
-        bne @x
-        lda sfxtime
-        cmp #3
-        bne @x
-        lda #$5c
-        sta $d40f
-        rts
-
 ; ---- tables ----
 bob     byte 0,1,2,3,3,4,4,4,4,4,3,3,2,1,0,0
 wingseq byte 0,1,2,1
@@ -1414,8 +1437,10 @@ imghi   byte >birdimg,>birdimg+33,>birdimg+66,>birdimg+99
         byte >birdimg+264,>birdimg+297,>birdimg+330,>birdimg+363
 
         incasm "modkit.asm"
+        incasm "tables.asm"     ; (the texts: in the room left before the graphics at $f000)
 codeend
         incasm "birdgfx.asm"
-        incasm "tables.asm"     ; (the texts after the graphics: the code is full to $f000)
+runend                          ; what a tick uses ends here, below screen a (tools/build.py
+                                ; checks it: a text past it was drawn over, and stext ran wild)
         incasm "modinit.asm"    ; (init only: in screen a, which drawall draws over after)
 c_space = c_sky

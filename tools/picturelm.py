@@ -8,7 +8,7 @@ PICTURE-LM (on SlopLoad 64's disk) makes the same file on a C64.
 
     picturelm.py PICTURE OUT.lm [-sprite FILE] [-spritepos X,Y]
                  [-spritecolours C,C,...] [-spritespeed N] [-spritemc A,B]
-                 [-spriteexpand] [-wait]
+                 [-spriteexpand] [-wait] [-drawin]
 
 PICTURE takes these C64 formats (FORMATS, below; slopload.py's -module too):
 Koala Painter and its kind (Interpaint, Face Painter, Run Paint),
@@ -23,7 +23,11 @@ first. An image from another computer is a converter's job.
 The options are slopload.py's (a picture module's): -wait puts PRESS SPACE
 OR FIRE across the picture's bottom row once the program is in, and
 waits for one; -sprite and its options put one or two sprites over the
-picture, flashing through up to 32 colours. Its tune (the tool's -sid,
+picture, flashing through up to 32 colours. -drawin has it draw in: as
+the first module it starts before its picture, clears the bitmap, and
+its screen and bitmap load while it shows, the picture appearing as they
+come (without it, the default, the picture loads whole, then shows). Its
+tune (the tool's -sid,
 or SlopLoad 64's music line) fades out at the end, as every module's
 does (-fade is kept for old command lines).
 
@@ -36,13 +40,18 @@ The file (MODULES.md's .lm): VIC bank 3, two parts.
   $C000-$CFE7  the module (assembled at $C000), its scratch, a Koala
                picture's colours (+76 says where: the module copies them
                into colour RAM as it starts, as a module's parts can't
-               load there), then the screen at $CC00
+               load there), then the screen at $CC00. With sprites it
+               runs to $CFFF: their pointers ($CFF8, $CFF9) are the
+               module's then, and a program's bytes there load after it
   $E000-$FFBF  the bitmap, then the sprites at $FF40 (64 bytes each)
 The header: +12 the jitter (48, and 8 a sprite on a line), +14 the
 loader's share (64: room beside the slowest tune a module takes, 3,700
 cycles a call), +15 the picture's background (0 for hires), +25 the bank
 (bank 3), +28 the ending and hires, +29 to +75 the sprites, +76 the
-colours' place (0: none).
+colours' place (0: none). +27 bit 6 (-drawin) has it draw in: as the
+first module, the mastering tools load its code, colours and sprites
+first, then its screen ($CC00) and bitmap ($E000) while it shows (+28
+bit 6).
 """
 import os
 import struct
@@ -55,7 +64,8 @@ import slopload as S  # noqa: E402
 
 LM_BASE = 0xc000            # the module
 LM_SHARE = 64               # the loader's share: beside a 3,700-cycle tune
-OPTS = ('sprite', 'spritepos', 'spritecolours', 'spritespeed', 'spritemc', 'spriteexpand', 'wait', 'fade')
+OPTS = ('sprite', 'spritepos', 'spritecolours', 'spritespeed', 'spritemc', 'spriteexpand', 'wait', 'fade',
+        'drawin')
 
 
 class Bad(Exception):
@@ -155,6 +165,8 @@ def make(picture, o):
     d[15] = pic['bg']
     d[25] = 0                                       # bank 3 ($dd00's bits)
     d[28] = 1 | (2 if o.get('wait') else 0) | (4 if pic['colour'] is None else 0)   # (the fade: always)
+    if o.get('drawin'):
+        d[27] |= 0x40                               # (it draws in: the tools load it so)
     if spr:
         d[29:76] = spr['header']
     main = bytearray(d) + bytes(claim - LM_BASE - len(d))      # (its scratch: zeros)
@@ -164,7 +176,7 @@ def make(picture, o):
         struct.pack_into('<H', main, 76, at)
     if len(main) > 0xcc00 - LM_BASE:
         raise Bad("the module and the colours run into the screen at $CC00")
-    main += bytes(0xcc00 - LM_BASE - len(main)) + bytes(pic['screen'])
+    main += bytes(0xcc00 - LM_BASE - len(main)) + bytes(pic['screen']) + (S.SPRITE_TAIL if spr else b'')
     second = bytes(pic['bitmap']) + (spr['data'] if spr else b'')
     return [(LM_BASE, bytes(main)), (0xe000, second)]
 
@@ -180,7 +192,7 @@ def main(argv):
     while i < len(argv):
         a = argv[i]
         k = a.lstrip('-').lower()
-        if a.startswith('-') and k in ('wait', 'fade', 'spriteexpand'):
+        if a.startswith('-') and k in ('wait', 'fade', 'spriteexpand', 'drawin'):
             o[k] = True
         elif a.startswith('-') and k in OPTS:
             if i + 1 >= len(argv):

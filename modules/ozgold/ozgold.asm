@@ -37,6 +37,7 @@ g_border = 1                    ; it leaves the border to the loader (gk_bord)
 g_sfx = 0                       ; no sound effects: the music keeps all three voices
 g_wait = 1                      ; with -wait it holds at 000 until SPACE (then the fade)
 g_count = 0                     ; (no status line: its own counter, always)
+g_end = 0                       ; (no game to end: -waitgame isn't for it)
 g_share = 60                    ; the most of the cpu (%) the loader may take
 gk_barhalf = 0                  ; (the kit's status line: not used, the
 gk_srow = 21*40                 ; counter is the status)
@@ -141,9 +142,11 @@ init    jsr gk_musinit          ; the header's music (a tune the tool chose)
         bne @c
         lda #$ff
         sta shown
+        jsr gk_keep             ; (a tune playing on keeps time: gk_keep)
         jsr show                ; the count, before the screen comes on
         jsr sidinit
-        jmp musicgo
+        jsr musicgo
+        jmp gk_kend             ; (a tune playing on: a play call just now)
 
 ; ------------------------------------------------------------
 ; stop  silence; the core blanks the screen after. With -autorun the
@@ -241,6 +244,10 @@ fsh = coldata                   ; (25) the tune's SID registers
 fkn = coldata+32                ; (25) 1: written
 fsv = coldata+64                ; (34) the RAM under $d400-$d41f; $d41b, $d41c
 
+        incasm "modkit.asm"
+        incasm "colours.asm"
+        incasm "music.asm"      ; the tune, on its own page
+                                ; (after it: no page to keep to)
 ; ------------------------------------------------------------
 ; show  TAPE ERROR on row 21 (flashing) while the tape has one, and
 ; the blocks left to load in the counter's box
@@ -330,9 +337,6 @@ tx_error
 tx_wait byte $10,$12,$05,$13,$13,$20,$13,$10,$01,$03,$05 ; PRESS SPACE (screen codes)
 tx_waitend
 
-        incasm "modkit.asm"
+        incasm "fadekit.asm"
         incasm "modinit.asm"
-        incasm "colours.asm"
-        incasm "music.asm"      ; the tune, on its own page
-        incasm "fadekit.asm"    ; (after it: no page to keep to)
 modend

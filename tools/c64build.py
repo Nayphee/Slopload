@@ -61,8 +61,8 @@ def demo_slm():
         slm = os.path.join(BUILD, t + '.slm')
         tag = slm + '.sha256'
         h = hashlib.sha256(open(sid, 'rb').read())
-        for src in ('sidstrip.py', 'sidfile.py', 'sidreloc.py'):
-            h.update(open(os.path.join(HERE, src), 'rb').read())
+        for src in SS.tool_sources():
+            h.update(open(src, 'rb').read())
         sha = h.hexdigest()
         if os.path.exists(slm) and os.path.exists(tag) and open(tag).read().strip() == sha:
             continue
@@ -82,6 +82,23 @@ def asm_bytes(label, data, per=16):
 
 def lohi(name, vals):
     return asm_bytes(name + 'lo', [v & 255 for v in vals]) + asm_bytes(name + 'hi', [v >> 8 for v in vals])
+
+
+# SlopLoad 64's effect list: a few words on each (26 characters at most; kept short: room)
+EFF_SAYS = {'standard': "line 7's colours", 'classic': "colour +1 a pulse",
+            'thin': "thin lines", 'mixed': "classic and thin",
+            'and': "colour and value", 'ora': "colour or value",
+            'eor': "colour eor value", 'line': "lines of one colour",
+            'block': "a colour a block"}
+assert max(len(t) for t in EFF_SAYS.values()) <= 26
+
+
+def head_line(name, sub, colour):
+    """a C64 tool's top lines: "*** name 0.13.0 ***" centred (the release:
+    VERSION), then its line of what it does (grey) and the colour after"""
+    t = f"*** {name} {version()} ***"
+    return (f'tx_head text "{" " * ((40 - len(t)) // 2)}",159,"*** ",5,"{name} {version()}",159," ***",13,151,'
+            f'"{" " * ((40 - len(sub)) // 2)}{sub}",{colour},0')
 
 
 def version():
@@ -126,7 +143,7 @@ def payload():
     # per speed: the boot set
     # (indexed by opt_speed: the speed + spneg, -12 to 13)
     boot = [M.best_set(max(S.H_MIN_BOOT, S.speed_h(s)), M.PMIN) for s in S.SPEEDS]
-    out += asm_bytes("bootsh", [h for h, m in boot]) + asm_bytes("bootsm", [m for h, m in boot])
+    out += asm_bytes("bootsh", [h for h, m in boot])     # (their pulse sets: nothing reads them)
     # phase 2: each block's least h at boot (a module's: from its jitter)
     out += asm_bytes("hminb", [max(S.H_MIN_BOOT, S.speed_h(s)) for s in S.SPEEDS])
     out += asm_bytes("spdh", [S.speed_h(s) for s in S.SPEEDS])
@@ -154,6 +171,10 @@ def payload():
     out += ["", "; core_stripes' patch: copied to c2ins at the start (after the core,",
             "; where the buffers go)"]
     out += asm_bytes("pl_c2", c2data) + [f"c2n = {len(c2data)}"]
+    t = f"*** slopload {version()} ***"             # the menu's top line, centred
+    out += ["", "; the menu's top line: the release (VERSION)",
+            f'tx_head text 147,5,"{" " * ((40 - len(t)) // 2)}",159,"*** ",5,"slopload {version()}",159,'
+            '" ***",13,152,0']
     open(os.path.join(C64, 'payload.asm'), 'w').write('\n'.join(out) + '\n')
 
 
@@ -277,18 +298,19 @@ FX_FIELDS = (('pt_game', 0, 1), ('pt_auto', 0, 1), ('pt_init', 0, 2), ('pt_frame
 def fx_patch(cs):
     """core_fx (the loading line effects, slopload.py -stripes classic,
     thin, mixed, and:N, ora:N, eor:N) from the core, in place: its bytes
-    from the effect's 4th on moved up 5 (the effect grows from stx's 3 to
-    8), then the bytes that differ from that, as (gap, xor) pairs: the
+    from the effect's 4th on moved up 7 (the effect grows from stx's 3 to
+    10), then the bytes that differ from that, as (gap, xor) pairs: the
     same list after the move makes core_fx, and before moving back makes
     the core again (plan.asm corefx, corefxd). Then where each setting
-    goes: the effect's 8 bytes, its colour, its stores' opcodes on and
+    goes: the effect's 10 bytes, its colour, its stores' opcodes on and
     off and their places; and the effects' names and costs."""
     a = open(os.path.join(BUILD, 'core.bin'), 'rb').read()
     b = open(os.path.join(BUILD, 'core_fx.bin'), 'rb').read()
     sf = S.sym('core_fx')
     p1 = cs['stripe'] - 0x400
     assert sf['stripe'] - 0x400 == p1
-    moved = a[:p1 + 3] + bytes(5) + a[p1 + 3:]
+    grow = S.FX_LEN - 3
+    moved = a[:p1 + 3] + bytes(grow) + a[p1 + 3:]
     assert len(b) >= len(moved) and len(b) <= 1024, (len(a), len(b))
     moved += bytes(len(b) - len(moved))
     diff = [(i, moved[i] ^ b[i]) for i in range(len(b)) if moved[i] != b[i]]
@@ -296,7 +318,7 @@ def fx_patch(cs):
     assert not fields & {i for i, _ in diff}, "core_fx: a patched field is one it changes"
     for f, at, n in FX_FIELDS:                  # (the fields where the move takes them)
         o = cs[f] - 0x400 + at
-        assert sf[f] - 0x400 + at == (o if o < p1 + 3 else o + 5), f
+        assert sf[f] - 0x400 + at == (o if o < p1 + 3 else o + grow), f
     packed, last = [], 0
     for i, x in diff:
         g = i - last
@@ -305,9 +327,10 @@ def fx_patch(cs):
             g -= 255
         packed += [g, x]
         last = i
-    out = ["", "; core_fx from the core (tools/c64build.py fx_patch): from cfxp + 3 moved up 5,",
+    out = ["", f"; core_fx from the core (tools/c64build.py fx_patch): from cfxp + 3 moved up {grow},",
            "; then (gap, xor) pairs; where each setting goes",
-           f"cfxp = {p1}", f"cfxlen = {len(b)}", f"nfx2 = {len(packed)}"]
+           f"cfxp = {p1}", f"cfxlen = {len(b)}", f"nfx2 = {len(packed)}", f"cfxlong = {S.FX_LEN}",
+           f"cfxshi = {(0x400 + p1) >> 8}             ; (the effect's first byte's high byte)"]
     for lab in ('fxbc', 'fxa1', 'fxb1', 'fxa0', 'fxb0', 'fxs', 'fxs2'):
         out.append(f"c{lab} = {sf[lab] + 1 - 0x400}")
     out.append(f"cfxcyc = {sf['cycle'] - 0x400}             ; -cycle: inc $d020 here (3 bytes)")
@@ -316,14 +339,17 @@ def fx_patch(cs):
     # names, nfxn: how many; each one's place in slopload.py's FX)
     names = list(S.FX)
     fxs = [S.stripe_fx(n + (':0' if n in S.FX_VALUE else '')) for n in names]
-    assert all(f['code'][4] == 0 for f in fxs if f['name'] in S.FX_VALUE)    # (the value: byte 4)
+    assert all(f['code'][f['vat']] == 0 for f in fxs if f['name'] in S.FX_VALUE)    # (the value: its byte)
+    assert all(f['code'][f['cat']] == 0 for f in fxs if f['cat'])       # (line's border: its byte)
+    assert ((0x400 + p1) & 255) + S.FX_LEN <= 256    # (the stores' places: their low bytes)
     # after them (not listed): the plain one, one colour with -cycle
     fxs.append(S.plain_fx(0))
     out += [f"nfxs = {len(names)}", f"fxplain = {len(names)}             ; (one colour, -cycle: no lines)",
             f"cfxslo = {(0x400 + p1) & 255}             ; (the effect's first byte's low byte)"]
     out += asm_bytes('fxcost', [S.FX[n] for n in names] + [0])
-    out += asm_bytes('fxval', [1 if n in S.FX_VALUE else 0 for n in names] + [0])
-    out += asm_bytes('fxtpl', [b for f in fxs for b in f['code']])      # (8 a piece)
+    out += asm_bytes('fxval', [f['vat'] for f in fxs])     # (the value's byte; 0: none)
+    out += asm_bytes('fxcof', [f['cat'] for f in fxs])     # (line: its border's colour's byte; 0: none)
+    out += asm_bytes('fxtpl', [b for f in fxs for b in f['code']])      # (10 a piece)
     out += asm_bytes('fxpa', [f['pa'] for f in fxs]) + asm_bytes('fxpb', [f['pb'] for f in fxs])
     out += asm_bytes('fxa1v', [f['a'][0] for f in fxs]) + asm_bytes('fxb1v', [f['b'][0] for f in fxs])
     out += asm_bytes('fxa0v', [f['a'][1] for f in fxs]) + asm_bytes('fxb0v', [f['b'][1] for f in fxs])
@@ -335,6 +361,11 @@ def fx_patch(cs):
         out.append(f"effn{k} text \"{n}\",0")
     out.append("effnlo byte " + ','.join(f"<effn{k}" for k in range(len(effs))))
     out.append("effnhi byte " + ','.join(f">effn{k}" for k in range(len(effs))))
+    # ... and a few words on each, beside it in the list (grey)
+    for k, n in enumerate(effs):
+        out.append(f"effd{k} text 155,\"{EFF_SAYS[n]}\",5,0")
+    out.append("effdlo byte " + ','.join(f"<effd{k}" for k in range(len(effs))))
+    out.append("effdhi byte " + ','.join(f">effd{k}" for k in range(len(effs))))
     return out
 
 
@@ -399,7 +430,11 @@ def main():
            f"shnone = {PS.SHARE[False]}",
            f"msgmax = 200                   ; (the PC tool's: {PS.MSG_MAX})"]
     out += asm_bytes('lmmain', main_[:code], 20)
-    out += asm_bytes('lmscr', low, 20)
+    out += ["", "; the second part, the screen codes: read or made into here (the demo's",
+            "; aren't kept: nothing is written until a screen is chosen)",
+            "lmscr = $c100                  ; (1000: to $c4e7; msgbuf at $c000)",
+            "", "; the top lines: the release",
+            head_line('petscii-lm', 'a petscii screen to a loader module', 30)]
     # the same built at $a000 for a chain (tools/build.py's petscii_chain.prg):
     # the bytes they differ in, each an address's high byte $40 less
     ch = open(os.path.join(BUILD, 'modules', 'petscii_chain.prg'), 'rb').read()
@@ -418,7 +453,19 @@ def main():
     open(pl, 'wb').write(bytes([1, 8]) + bytes(data))
     print(f"petscii-lm  ${org:04X}-${org + len(data) - 1:04X}  {len(data)} bytes; buffers to ${labs['bssend']:04X},"
           f" its font ${labs['fontbuf']:04X}")
-    # SID-SLM (a .sid tried out and written as a .slm, for SlopLoad 64)
+    # SID-SLM (a .sid or a PRG tune tried out and written as a .slm, for
+    # SlopLoad 64): its top lines and a PRG tune's play times (sidstrip.py's
+    # prg_rates: 1-8 calls a frame, made for PAL, then for NTSC)
+    import sidstrip as SS
+    rt = [SS.prg_rates(n, ntsc) for ntsc in (False, True) for n in range(1, 9)]
+    out = ["; generated by tools/c64build.py - do not edit",
+           "; the top lines: the release",
+           head_line('sid-slm', 'a tune made ready for slopload 64', 30),
+           "; a PRG tune's times between play calls (1/64 raster lines): 1-8 calls",
+           "; a frame made for PAL, then 1-8 made for NTSC (sidstrip.py's prg_rates)"]
+    out += asm_bytes('prtpal', [b for pp, pn in rt for b in (pp & 255, pp >> 8)])
+    out += asm_bytes('prtnt', [b for pp, pn in rt for b in (pn & 255, pn >> 8)])
+    open(os.path.join(C64, 'slmgen.asm'), 'w').write("\n".join(out) + "\n")
     org, data, labs = B.assemble(os.path.join(C64, 'sidslm.asm'), 'sidslm', {})
     assert org == 0x0801, hex(org)
     stage = labs['stage']                   # (the music pool after the program, the file after it)
@@ -439,6 +486,7 @@ def main():
            f"lmlen = {len(mdata)}                 ; its bytes",
            f"lmclaim = ${mlabs['modend']:04x}              ; the end of what it claims (its scratch after them)"]
     out += asm_bytes('pl_lm', mdata, 20)
+    out += ["", "; the top lines: the release", head_line('picture-lm', 'a picture to a loader module', 30)]
     # the picture formats (picturelm.py's FORMATS): lengths, load address
     # (0 any, $ff a bitmap's, else its high byte), kind (bit 0 hires, bit 1
     # one colour for all), and where the bitmap, screen, colours and the

@@ -10,10 +10,13 @@
 ;   g_sfx     1 if it makes sound effects on voice 3 when the music is
 ;             SlopLoad's own player (header +24 = 1), else 0
 ;   g_wait    1 if it keeps the tool's -wait (header +28 bit 1): once
-;             loaded it stays until SPACE (the kit's startkey) or, a
-;             game, the end of a game (gk_done); a loading screen holds
-;             at its end until SPACE; else 0. Without -wait every module
-;             ends as soon as the program is in
+;             loaded it stays until SPACE (the kit's startkey; a game
+;             plays on, round after round), a loading screen holding at
+;             its end; else 0
+;   g_end     1 if it keeps the tool's -waitgame (header +28 bit 5): a
+;             game that, once loaded, stays until the end of a game (the
+;             kit's gk_done); else 0. Without either every module ends
+;             as soon as the program is in (its music faded out)
 ;   g_count   1 if its status line counts the blocks left with the
 ;             tool's -countdown (header +28 bit 3: the kit's status),
 ;             else 0
@@ -36,12 +39,13 @@ hmplay  word $c003
 hmflags byte 1                  ; +24 music: 1 the built-in player, 2 a sid
         byte 0                  ; +25 (the picture's vic bank: show module only)
 hblocks byte 0                  ; +26 the program's size in disk blocks (set by the tool)
-        byte g_border+g_sfx*2+g_wait*4+g_count*8+gk_chain
+        byte g_border+g_sfx*2+g_wait*4+g_count*8+gk_chain+g_end*32
                                 ; +27 bit 0: it leaves the border to the loader (ld_state
                                 ; bit 5); bit 1: its effects on voice 3 (SlopLoad's player);
                                 ; bit 2: it keeps -wait; bit 3: it keeps -countdown; bit 4:
                                 ; second in a chain, it plays on the tune the first started
-                                ; (the kit's sidinit and musicgo)
-hopt    byte 0                  ; +28 the tool's options: bit 1 -wait, bit 3 -countdown,
-                                ; bit 4 a chain's tune already playing
+                                ; (the kit's sidinit and musicgo); bit 5: it keeps -waitgame
+hopt    byte 0                  ; +28 the tool's options: bit 1 -wait (SPACE), bit 3
+                                ; -countdown, bit 4 a chain's tune already playing, bit 5
+                                ; -waitgame (the end of a game)
         byte 0,0,0              ; (to 32 bytes)

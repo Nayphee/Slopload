@@ -2,9 +2,18 @@
 """sidstrip.py - a SID tune made ready for SlopLoad.
 
     sidstrip.py tune.sid [out.slm] [-song N] [-frames N] [-cut]
+    sidstrip.py tune.prg [out.slm] [-init [$]HHHH] [-inita [$]HH] [-play [$]HHHH]
+                         [-calls N] [-clock pal|ntsc] [-frames N] [-cut]
 
-Reads a PSID file, runs the chosen song in the 6502 simulator
-(tools/sidfile.py) and makes it safe to play beside the loader:
+Reads a PSID file, or a C64 PRG tune (any file that isn't a PSID or
+RSID: a music editor's, such as DMC, EMS or Future Composer, its load
+address its first two bytes), runs the chosen song in the 6502 simulator
+(tools/sidfile.py) and makes it safe to play beside the loader. A PRG
+tune is called as given: init with A (-init 1000 -inita 00: lda #$00,
+jsr $1000), play (-play 1003: jsr $1003) -calls times a frame (1-8) on
+the machine it was made for (-clock); the defaults are init at the load
+address with A = 0, play three past it, once a frame, PAL, as most
+editors' players are. Its name in the .slm is the file's. In short:
 
   - stores the loader can't allow are turned into no-ops of the same
     length (NOP #imm, and a NOP after it for three-byte ones: no memory
@@ -66,6 +75,8 @@ import sidfile as F  # noqa: E402
 PAL_HZ, NTSC_HZ = 985248, 1022727
 PAL_FPS, NTSC_FPS = PAL_HZ / (63 * 312), NTSC_HZ / (65 * 263)
 DEFAULT_LATCH = 0x4025          # the KERNAL's 60 Hz timer: a CIA tune's rate if init sets none
+DEFAULT_LATCH_NTSC = 0x4295     # ... an NTSC machine's KERNAL (a tune made for NTSC: with
+                                # $4025 it came out 62.3 a second, 3.8% fast)
 GAME_PLAY_MAX = 3700            # cycles a play call may take beside a module (c64model's;
                                 # the heaviest tried, 3,695, with Crossy-Load on NTSC; the
                                 # built-in tune: 2,251)
@@ -380,8 +391,53 @@ def cut_pages(t, song, frames, name, after=None):
                                      of_pages=((hi - 1) >> 8) - (lo >> 8) + 1, frames=frames)
 
 
-def strip(path, song=None, frames=15000, cut=False):
-    t = F.read(path)
+def prg_rates(calls, ntsc=False):
+    """(per_pal, per_ntsc), the .slm's times between play calls, for a
+    PRG tune called `calls` times a frame on the machine it was made for
+    (strip's rule; SID-SLM has them as tables, tools/c64build.py)"""
+    hz = (NTSC_FPS if ntsc else PAL_FPS) * calls
+    return round(312 * 64 * PAL_FPS / hz), round(263 * 64 * NTSC_FPS / hz)
+
+
+def prg_opts(init=None, inita=None, play=None, calls=None, clock=None):
+    """read_prg's keywords from the tools' options: -init, -inita, -play
+    in hex ($ or not), -calls 1-8, -clock pal or ntsc; Refused for one
+    that isn't right"""
+    def hx(v, what, top):
+        try:
+            n = int(str(v).strip().lstrip('$'), 16)
+        except ValueError:
+            raise Refused(f"{what} {v}: not a hex number") from None
+        if not 0 <= n <= top:
+            raise Refused(f"{what} {v}: ${top:X} at most")
+        return n
+    out = {}
+    if init is not None:
+        out['init'] = hx(init, '-init', 0xffff)
+    if inita is not None:
+        out['a'] = hx(inita, '-inita', 0xff)
+    if play is not None:
+        out['play'] = hx(play, '-play', 0xffff)
+        if not out['play']:
+            raise Refused("-play 0: a tune needs a play routine")
+    if calls is not None:
+        try:
+            out['calls'] = int(calls)
+        except ValueError:
+            raise Refused(f"-calls {calls}: a number, 1 to 8") from None
+        if not 1 <= out['calls'] <= 8:
+            raise Refused(f"-calls {calls}: 1 to 8 play calls a frame")
+    if clock is not None:
+        if str(clock).lower() not in ('pal', 'ntsc'):
+            raise Refused(f"-clock {clock}: pal or ntsc")
+        out['ntsc'] = str(clock).lower() == 'ntsc'
+    return out
+
+
+def strip(path, song=None, frames=15000, cut=False, prg=None):
+    """the tune at path (a .sid; with prg, read_prg's keywords, a PRG
+    tune) made ready: its .slm's fields, or Refused"""
+    t = F.read_prg(path, **prg) if prg is not None else F.read(path)
     name = os.path.basename(path)
     if t['rsid']:
         raise Refused(f"{name} is an RSID tune: it sets up its own interrupts, which the loader"
@@ -451,12 +507,15 @@ def strip(path, song=None, frames=15000, cut=False):
         raise Refused(f"{name}: still writes ${left[0]:04X} once patched")
     if s2.sid_log != s.sid_log:
         raise Refused(f"{name}: patched, it plays differently (it needed what was taken out)")
-    # its rate: once a frame, or CIA 1 timer A
+    # its rate: once a frame, or CIA 1 timer A; a PRG tune's as given
     cia = F.cia_timed(t, song)
     ntsc_tune = t['clock'] == 'NTSC'
-    if cia:
+    if t.get('calls'):
+        cia, latch = t['calls'] > 1, None
+        hz = (NTSC_FPS if ntsc_tune else PAL_FPS) * t['calls']
+    elif cia:
         latch = s.mem[0xdc04] | s.mem[0xdc05] << 8 if (0xdc04 in s.writes or 0xdc05 in s.writes) else 0
-        latch = latch or DEFAULT_LATCH
+        latch = latch or (DEFAULT_LATCH_NTSC if ntsc_tune else DEFAULT_LATCH)
         hz = (NTSC_HZ if ntsc_tune else PAL_HZ) / (latch + 1)
     else:
         latch = None
@@ -488,6 +547,7 @@ def strip(path, song=None, frames=15000, cut=False):
                 per_pal=per_pal, per_ntsc=per_ntsc, play_cycles=s.worst, play_clk=s.worst_clk,
                 zp=zp, workspace=ws,
                 patched=patched, frames=frames, relocs=relocs, reloc_why=reloc_why, cut=cutinfo,
+                prg=t.get('prg'),
                 flags=(1 if not ntsc_tune else 0) | (2 if t['clock'] in ('NTSC', 'PAL/NTSC') else 0)
                 | (4 if cia else 0) | (8 if relocs is not None else 0))
 
@@ -533,7 +593,7 @@ def write_slm(path, m):
                                   m['song'] - 1, m['flags'], m['per_pal'], m['per_ntsc'],
                                   min(65535, m['play_clk']))
            + bytes(zp) + bytes([len(m['workspace'])])
-           + b''.join(struct.pack('<HH', lo, hi) for lo, hi in m['workspace'])
+           + b''.join(struct.pack('<HH', lo, min(hi, 0xffff)) for lo, hi in m['workspace'])
            + struct.pack('<H', len(m['relocs'] or [])) + b''.join(struct.pack('<H', r) for r in m['relocs'] or [])
            + txt(m['name']) + txt(m['author']) + txt(m['released']) + m['data'])
     open(path, 'wb').write(out)
@@ -574,16 +634,18 @@ def _read_slm(path, d):
                 hz=PAL_FPS * 312 * 64 / pp, patched=[], clock=('NTSC' if not flags & 1 else 'PAL'))
 
 
-def load_music(path, song=None):
-    """a .sid (stripped now, or found stripped in the cache) or a .slm
-    (stripped before)"""
+def load_music(path, song=None, prg=None):
+    """a .sid (stripped now, or found stripped in the cache), a .slm
+    (stripped before) or, with prg (read_prg's keywords), a PRG tune"""
     if path.lower().endswith('.slm'):
         return read_slm(path)
-    hit = cache_get(path, song)
+    hit = cache_get(path, song, prg)
     if hit:
+        if prg is not None:                 # (a PRG tune's name is its file's, not
+            hit['name'] = F.read_prg(path, **prg)['name']     # its bytes')
         return hit
-    m = strip(path, song)
-    cache_put(path, song, m)
+    m = strip(path, song, prg=prg)
+    cache_put(path, song, m, prg)
     return m
 
 
@@ -593,19 +655,30 @@ def load_music(path, song=None):
 # by the file's SHA-256, the song and the code's, and found there the next
 # time. A refusal isn't kept (it is quick to find again); a cache that
 # can't be written is no cache.
-def cache_name(path, song):
+def cache_name(path, song, prg=None):
     import hashlib
+    import json
     h = hashlib.sha256(open(path, 'rb').read())
-    for src in ('sidstrip.py', 'sidfile.py', 'sidreloc.py'):
-        h.update(open(os.path.join(HERE, src), 'rb').read())
+    if prg is not None:                     # (a PRG tune: how it is called)
+        h.update(json.dumps(sorted(prg.items())).encode())
+    for src in tool_sources():
+        h.update(open(src, 'rb').read())
     base = os.environ.get('XDG_CACHE_HOME') or os.path.join(os.path.expanduser('~'), '.cache')
     return os.path.join(base, 'slopload', 'sid', f"{h.hexdigest()[:40]}-{song or 0}.json")
 
 
-def cache_get(path, song):
+def tool_sources():
+    """the files a stripped tune comes out of: every cache of one is keyed
+    by them (this one, tools/c64build.py's demo .slm files, OZ GOLD's
+    music.asm): the simulator and its opcode tables too"""
+    return ([os.path.join(HERE, f) for f in ('sidstrip.py', 'sidfile.py', 'sidreloc.py', 'asm6502.py')]
+            + [os.path.join(os.path.dirname(HERE), 'tests', 'sim6502.py')])
+
+
+def cache_get(path, song, prg=None):
     import json
     try:
-        c = json.load(open(cache_name(path, song)))
+        c = json.load(open(cache_name(path, song, prg)))
     except (OSError, ValueError):
         return None
     try:
@@ -618,11 +691,11 @@ def cache_get(path, song):
     return c
 
 
-def cache_put(path, song, m):
+def cache_put(path, song, m, prg=None):
     import json
     import tempfile
     try:
-        name = cache_name(path, song)
+        name = cache_name(path, song, prg)
         os.makedirs(os.path.dirname(name), exist_ok=True)
         c = dict(m, data=bytes(m['data']).hex())
         fd, tmp = tempfile.mkstemp(dir=os.path.dirname(name), suffix='.tmp')
@@ -635,9 +708,15 @@ def cache_put(path, song, m):
 
 def report(m):
     end = m['load'] + len(m['data'])
-    print(f"{m['name']} / {m['author']} / {m['released']}")
-    print(f"  song {m['song']} of {m.get('songs', '?')}, ${m['load']:04X}-${end - 1:04X}"
-          f" ({len(m['data'])} bytes), init ${m['init']:04X}, play ${m['play']:04X}")
+    p = m.get('prg')
+    if p:
+        print(f"{m['name']}: a PRG tune, made for {'NTSC' if p['ntsc'] else 'PAL'}")
+        print(f"  ${m['load']:04X}-${end - 1:04X} ({len(m['data'])} bytes), init lda #${p['a']:02X}"
+              f" : jsr ${m['init']:04X}, play jsr ${m['play']:04X}")
+    else:
+        print(f"{m['name']} / {m['author']} / {m['released']}")
+        print(f"  song {m['song']} of {m.get('songs', '?')}, ${m['load']:04X}-${end - 1:04X}"
+              f" ({len(m['data'])} bytes), init ${m['init']:04X}, play ${m['play']:04X}")
     c = m.get('cut')
     if c and c.get('after'):
         a = c['after']
@@ -653,7 +732,8 @@ def report(m):
     if len(m['data']) > TUNE_MAX:
         more = (": -cut keeps only this song's part" if not c and (m.get('songs') or 1) > 1 else "")
         print(f"  over {TUNE_MAX} bytes: SlopLoad 64 takes {TUNE_MAX} at most{more}")
-    rate = (f"CIA timed ({m['hz']:.1f} a second)" if m['cia'] else
+    rate = (f"{p['calls']} times a frame ({m['hz']:.1f} a second)" if p and p['calls'] > 1 else
+            f"CIA timed ({m['hz']:.1f} a second)" if m['cia'] else
             f"once a frame ({m['hz']:.1f} a second)")
     clk = f"{m['play_clk']} cycles (jsr+rts included)" + (
         f", {m['play_cycles']} instructions" if m.get('play_cycles') is not None else "")
@@ -677,18 +757,28 @@ def main(argv):
     if not argv:
         print(__doc__)
         return 1
+    valued = ('-song', '-frames', '-init', '-inita', '-play', '-calls', '-clock')
     try:
         song = int(argv[argv.index('-song') + 1]) if '-song' in argv else None
         frames = int(argv[argv.index('-frames') + 1]) if '-frames' in argv else 15000
+        given = {k[1:]: argv[argv.index(k) + 1] for k in valued[2:] if k in argv}
     except (ValueError, IndexError):
-        print("sidstrip: -song and -frames need a number", file=sys.stderr)
+        print("sidstrip: -song and -frames need a number, -init -inita -play -calls -clock a value",
+              file=sys.stderr)
         return 1
-    pos = [a for i, a in enumerate(argv) if not a.startswith('-') and (i == 0 or argv[i - 1] not in ('-song', '-frames'))]
+    pos = [a for i, a in enumerate(argv) if not a.startswith('-') and (i == 0 or argv[i - 1] not in valued)]
     if not pos:
         print(__doc__)
         return 1
     try:
-        m = strip(pos[0], song, frames, cut='-cut' in argv)
+        prg = None
+        if not F.is_sid(pos[0]):                # a PRG tune: called as given
+            if song is not None:
+                raise Refused("-song is a .sid's: a PRG tune's song is init's A (-inita)")
+            prg = prg_opts(**given)
+        elif given:
+            raise Refused(f"-{sorted(given)[0]} is for a PRG tune: a .sid says it itself")
+        m = strip(pos[0], song, frames, cut='-cut' in argv, prg=prg)
     except (Refused, F.Bad) as ex:
         print(f"sidstrip: {ex}", file=sys.stderr)
         return 1

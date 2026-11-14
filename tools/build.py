@@ -66,6 +66,7 @@ def assemble(path, name, subst=None, transform=None):
         src, n = re.subn(rf'(?m)^{k}\s*=.*$', f'{k} = ${v:04x}', src)
         if n != 1:
             raise SystemExit(f"{path}: expected one '{k} =' line, found {n}")
+    os.makedirs(BUILD, exist_ok=True)           # (the error's dump goes there too)
     try:
         origin, data, labels, listing = asm6502.assemble(src)
     except asm6502.AsmError as ex:
@@ -130,7 +131,7 @@ def build_loader():
             if (lb[t] & 0xff) + 14 > 0x100:
                 raise SystemExit(f"{name}: {t} crosses a page (setm sets its low byte only)")
     lb = json.load(open(os.path.join(BUILD, 'core_fx.sym.json')))
-    if (lb['stripe'] & 0xff) + 8 > 0x100:
+    if (lb['stripe'] & 0xff) + FX_LEN > 0x100:
         raise SystemExit("core_fx: the effect crosses a page (the tool sets its stores' low bytes)")
     lab = json.load(open(os.path.join(BUILD, 'core_stripes.sym.json')))
     if (lab['stab'] & 0xff) > 0x100 - 12:
@@ -161,15 +162,18 @@ STRIPE_EDITS = [
 # back to the effect's own colour (after a tape error's red); the tool
 # sets their opcodes and places (fxs: the stores' low bytes, the effect
 # within a page). Made so that SlopLoad 64 can make it from the core in
-# place (c64build.py fx_patch): the effect's 5 more bytes the only thing
+# place (c64build.py fx_patch): the effect's 7 more bytes the only thing
 # inserted, fstr, errshow's way back and stroff changed at their own
-# length, and stron after everything
-FX_LEN = 8
+# length, and stron after everything. 10 bytes: line's two loads and
+# stores (lda #A : sta $d020 : lda #B : sta $d020); the 8-byte ones end
+# with cmp #$00 (2 cycles: the core then fills its 1,024 bytes)
+FX_LEN = 10
 FX_EDITS = [
     ("stripe  stx $d020               ; border stripes ($2c: bit, when off)",
-     "stripe  lda $d020               ; the effect, 8 bytes (the tool's)\n"
+     "stripe  lda $d020               ; the effect, 10 bytes (the tool's)\n"
      "        eor #$00\n"
-     "        inc $d020"),
+     "        inc $d020\n"
+     "        cmp #$00"),
     ("fstr    lda #$8e\n        sta stripe              ; stx: stripes on",
      "fstr    jsr stron               ; stripes on\n"
      "        nop\n"
@@ -301,6 +305,10 @@ def build_modules():
         if 'initend' in lab and lab['initend'] > lab['initpart'] - 256 + 1000:
             raise SystemExit(f"{g}: its setting up (boot.asm) runs into screen a's last 24 bytes"
                              f" (by {lab['initend'] - (lab['initpart'] - 256 + 1000)})")
+        if 'runend' in lab and 'scra' in lab and lab['runend'] > lab['scra']:
+            raise SystemExit(f"{g}: what it uses while it runs ends at ${lab['runend'] - 1:04X}, inside its"
+                             f" screen at ${lab['scra']:04X} (by {lab['runend'] - lab['scra']}): its own"
+                             " drawing would overwrite it")
         if d[:4] != b'PLG1':
             raise SystemExit(f"{g}: a module must start with the bytes 'PLG1'")
         open(os.path.join(BUILD, 'modules', g + '.prg'), 'wb').write(asm6502.to_prg(o, d))
@@ -328,6 +336,12 @@ def build_modules():
                 asm6502.to_prg(top, d2[top - o2:]))
             print(f"     {'(chain)':8s} ${top:04X}-${lab2['modend'] - 1:04X}  {lab2['modend'] - top:4d} bytes")
         if g == 'show':                 # (the tools build it in: no .lm)
+            cs = json.load(open(os.path.join(BUILD, 'core.sym.json')))
+            bad = [k for k in ('pt_frame', 'pt_stop', 'pt_step') if lab[k] != cs[k]]
+            if cs['pt_stop'] != cs['pt_frame'] + 2 or cs['pt_step'] != cs['pt_frame'] + 4:
+                bad.append('pt_frame, pt_stop and pt_step side by side')   # (its hand-over copies them)
+            if bad:                     # (its hand-over writes the core's vectors)
+                raise SystemExit(f"show: its {', '.join(bad)} aren't the core's (modules/show/show.asm)")
             os.remove(os.path.join(BUILD, 'modules', g + '.lm'))
         parts = os.path.join(gdir, g, 'parts.json')     # extra files a module brings
         built = os.path.join(BUILD, 'modules', g + '.parts.json')

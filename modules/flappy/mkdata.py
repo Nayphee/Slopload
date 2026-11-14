@@ -246,7 +246,6 @@ for b in range(256):
 TEXTS = {
     'tx_title': "FLAPPY-LOAD",
     'tx_ready': "GET READY!",
-    'tx_fire': "PRESS FIRE TO FLAP",
     'tx_over': "GAME OVER",
     'tx_score': "SCORE",
     'tx_best': "BEST",

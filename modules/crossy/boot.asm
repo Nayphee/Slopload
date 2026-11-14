@@ -44,14 +44,18 @@ init    jsr gk_musinit          ; the music's addresses from the header
         sta rnd+1
         jsr sidinit
         jsr musicgo
-        jsr clrall
+        jsr gk_keep             ; (a tune playing on keeps time: at least
+        jsr clrall              ; once a frame, gk_keep)
+        jsr gk_keep
         jsr newworld
 @g      jsr genlane
+        jsr gk_keep
         lda lgen
         cmp #16
         bne @g
 @b      lda cprow               ; the play field, all of it, in buffer b
         jsr regenrow
+        jsr gk_keep
         inc cprow
         lda cprow
         cmp #lastrow+1
@@ -74,10 +78,13 @@ init    jsr gk_musinit          ; the music's addresses from the header
         sta cprow
         sta ntscc
         sta mntsc
+        jsr gk_keep
         jsr colall
+        jsr gk_keep
         lda #d018b
         sta $d018
         jsr drawscore
+        jsr gk_keep
         lda #$ff
         sta smode
         jmp inidone             ; (screen a, where this was, blank: the title)
@@ -99,6 +106,11 @@ clrall  ldx #0
         sta $da00,x
         sta $dae8,x
         inx
+        txa                     ; (a tune playing on keeps time: a call
+        and #$3f                ; every 64, gk_keep)
+        bne @k
+        jsr gk_keep
+@k      txa
         bne @c
         rts
 

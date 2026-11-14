@@ -99,8 +99,9 @@ s1bc    lda #0                  ; the border (slopload.py: a flat border's colou
         sta $dd07               ; cia2 tb latch hi
         lda #tb_start
         sta $dd06
+        lda #$7f                ; cia1 tb latch = $ff7f: the stopwatch (the
+        sta $dc06               ; core's: the high byte of 256h is h rounded)
         lda #$ff
-        sta $dc06               ; cia1 tb latch = $ffff: the stopwatch
         sta $dc07
         lda $01
         and #$1f                ; cassette motor on
@@ -124,14 +125,13 @@ s1sync  lda #h_def-1
         cpy #cal_start
         bne @n1
         lda #cia_ta_run
-        sta $dc0f               ; stopwatch from $ffff
+        sta $dc0f               ; stopwatch from $ff7f
 @n1     cpy #cal_end
         bne @p
-        lda #$fe                ; 128 pulses of 4h = 512h cycles:
-        sec                     ; ($ff - hi) = elapsed / 256 = 2h (rounded
-        sbc $dc07               ; up), less 1
-        lsr a                   ; h-1: the latch for a period of h
-        sta $dd04
+        lda #$fe                ; 64 pulses of 4h = 256h cycles (h to 255: no
+        sec                     ; 16-bit overflow at any speed or clock):
+        sbc $dc07               ; ($ff - hi) = elapsed / 256 = h rounded, less
+        sta $dd04               ; 1: the latch for a period of h
         sta ld_cal              ; non-zero: measured
         bne @p                  ; (always)
 @nc0    cpx #3

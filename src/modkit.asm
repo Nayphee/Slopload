@@ -7,9 +7,10 @@
 ;   soundkey    S turns the music off and on
 ;   readfire    fire on joystick port 2 (fpress: a fresh press)
 ;   startkey    once loaded, exitreq: at once, or with the tool's -wait
-;               on a fresh SPACE (the module plays on until then)
-;   gk_done     a game over: once loaded, exitreq (with -wait, the end
-;               of a game starts the program too)
+;               on a fresh SPACE (the module plays on until then); with
+;               -waitgame not here (gk_done)
+;   gk_done     a game over: once loaded, exitreq (but with -wait, which
+;               is SPACE alone, the game goes on)
 ;   gk_exit     the frame's last call: c set when the module may end,
 ;               exitreq set and the music faded out first (fadekit.asm:
 ;               every module includes it, where it has room)
@@ -84,7 +85,9 @@ musicgo lda #0
 ; mplay the tick's music: the tune's play routine (mplayr), or once
 ; gk_exit has begun the fade, the fade's tick (which plays it quieter)
 minit   jmp $c000
-mplay   lda gk_fade
+mplay   lda #0                  ; (the module plays it now: gk_keep done)
+        sta gk_kon
+        lda gk_fade
         beq mplayr
         jmp fade
 mplayr  jmp $c003
@@ -101,6 +104,11 @@ mstop   lda mflags
         rts
 mflags  byte 1                  ; 1 the built-in player, 2 a sid (no effects)
 gk_opt  byte 0                  ; header +28: the tool's options (gk_musinit)
+gk_kon  byte 0                  ; gk_keep on: a tune playing on (+28 bit 4) until mplay
+gk_kl   byte 0                  ; ... the raster line it last saw (low byte, bit 8 as $80)
+gk_kh   byte 0
+gk_kt   byte 0
+gk_kpl  byte 0                  ; ... set when it plays (gk_kend)
 gk_blk  byte 0                  ; header +26: the program's blocks (gk_musinit)
 
 ; soundkey  s: music off and on
@@ -147,6 +155,58 @@ readfire
         rts
 
 ; ------------------------------------------------------------
+; gk_keep  a tune that plays on (a chain's, or the music first's: the
+; header's +28 bit 4) keeps time while init draws the screens: a play
+; call at each new frame, until the module's own first (mplay). Call it
+; in a long init's loops, at least once a frame (a frame's worth of
+; drawing between two calls misses one); gk_exit calls it at each
+; frame's end until the module plays the tune itself
+;   uses: the flags (a, x, y kept)
+; ------------------------------------------------------------
+gk_keep pha
+        lda gk_kon
+        beq @x
+        txa
+        pha
+@rd     lda $d012               ; the line: bit 8, low byte (read again if
+        sta gk_kt               ; it moved on meanwhile)
+        lda $d011
+        ldx $d012
+        cpx gk_kt
+        bne @rd
+        and #$80
+        cmp gk_kh               ; lower than the line last seen: a new frame
+        bne @h
+        cpx gk_kl
+@h      stx gk_kl
+        sta gk_kh
+        bcs @r
+        lda #1                  ; (played: gk_kend)
+        sta gk_kpl
+        tya
+        pha
+        jsr mplayr
+        pla
+        tay
+@r      pla
+        tax
+@x      pla
+        rts
+
+; gk_kend  a long init's last call: with a tune playing on, on until
+; gk_keep's next play call (at most a frame), so that the module's own
+; first, in its first frame, comes about a frame after it
+;   uses: a, the flags
+gk_kend lda gk_kon
+        beq @x
+        lda #0
+        sta gk_kpl
+@w      jsr gk_keep
+        lda gk_kpl
+        beq @w
+@x      rts
+
+; ------------------------------------------------------------
 ; startkey  once the program is loaded, it starts (exitreq): at once,
 ; or with the tool's -wait (header +28 bit 1, gk_opt) on a fresh SPACE
 ; press, the module playing on until then (joystick 1's fire reads on
@@ -157,7 +217,7 @@ startkey
         bpl @x
         lda gk_opt
         and #2
-        beq @go                 ; no -wait: now
+        beq @ng                 ; no -wait: now, or (-waitgame) at the game's end
         lda dbg_space
         bne @go
         lda #$ff
@@ -180,16 +240,24 @@ startkey
 @up     lda #0
         sta spc
         rts
+@ng     lda gk_opt
+        and #$20
+        bne @x                  ; (-waitgame: gk_done's)
+        beq @go
 
 ; ------------------------------------------------------------
-; gk_done  a game is over: once the program is in, it starts. Only
-; -wait (header +28 bit 1) keeps a module running once it's in
-; (startkey), so this is its other way out: SPACE, or the end of a game
-;   out:  c set: asked to start (exitreq 1); c clear: still loading
+; gk_done  a game is over: once the program is in, it starts (at once,
+; or the end -waitgame waits for); with -wait (header +28 bit 1: SPACE
+; alone) the game goes on
+;   out:  c set: asked to start (exitreq 1); c clear: still loading, or
+;         -wait's SPACE still to come (a new game)
 ;   uses: a
 ; ------------------------------------------------------------
 gk_done bit ld_state
         bpl @no
+        lda gk_opt
+        and #2
+        bne @no                 ; (-wait: SPACE alone)
         lda #1
         sta exitreq
         sec
@@ -206,7 +274,8 @@ gk_done bit ld_state
 ;   out:  c set: end; c clear: run on
 ;   uses: a
 ; ------------------------------------------------------------
-gk_exit lda exitreq
+gk_exit jsr gk_keep             ; (until the module's own first play call)
+        lda exitreq
         beq @no
         lda musicon
         beq @yes                ; (no music: at once)
@@ -264,7 +333,16 @@ status  lda ld_state
         jsr clrstatus
         ldx #<tx_loaded
         ldy #>tx_loaded
-        lda #1
+        lda gk_opt              ; SPACE starts it (-wait): the whole text;
+        and #2                  ; else "LOADED!", its first 7 (the music
+        bne @all                ; fading, or the game playing on to its end)
+        stx pt2
+        sty pt2+1
+        ldx #1
+        ldy #0
+        lda #7
+        jmp stextn
+@all    lda #1
         jmp stext
 
 clrstatus
@@ -282,7 +360,7 @@ stext   stx pt2
         tax
         ldy #0
         lda (pt2),y
-        sta tmp
+stextn  sta tmp                 ; (a the length, x the column, y 0, pt2 the text)
         iny
 @t      lda (pt2),y
         sta scra+gk_srow,x

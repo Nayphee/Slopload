@@ -99,6 +99,42 @@ def read(path):
                 clock={0: 'unknown', 1: 'PAL', 2: 'NTSC', 3: 'PAL/NTSC'}[(flags >> 2) & 3])
 
 
+def is_sid(path):
+    """True for a PSID or RSID file (by its first four bytes)"""
+    with open(path, 'rb') as f:
+        return f.read(4) in (b'PSID', b'RSID')
+
+
+def read_prg(path, init=None, play=None, a=0, calls=1, ntsc=False):
+    """a C64 PRG tune, as a music editor saves one (DMC, EMS, Future
+    Composer...): its load address its first two bytes, then the tune.
+    Init is called with A = a, play `calls` times a frame on the machine
+    it was made for (ntsc: NTSC, else PAL); init defaults to the load
+    address and play to three past it, as most editors' players have
+    them. In read()'s form, its song a + 1 (a .sid's init gets A = the
+    song - 1), its name the file's less its ending"""
+    d = open(path, 'rb').read()
+    if len(d) < 3:
+        raise Bad(f"{path}: too short for a tune ({len(d)} bytes)")
+    load = d[0] | d[1] << 8
+    data = d[2:]
+    if load + len(data) > 0x10000:
+        raise Bad(f"{path}: it runs past $FFFF (${load:04X}, {len(data)} bytes)")
+    init = load if init is None else init
+    play = load + 3 if play is None else play
+    if not 0 <= a <= 255:
+        raise Bad(f"{path}: init's A is a byte ($00-$FF), not {a}")
+    if not 1 <= calls <= 8:
+        raise Bad(f"{path}: 1 to 8 play calls a frame, not {calls}")
+    if not 0 <= init <= 0xffff or not 0 < play <= 0xffff:
+        raise Bad(f"{path}: init and play are addresses ($0001-$FFFF)")
+    return dict(path=path, rsid=False, version=2, load=load, end=load + len(data), init=init,
+                play=play, songs=a + 1, start=a + 1, speed=0, flags=(2 if ntsc else 1) << 2,
+                name=os.path.splitext(os.path.basename(path))[0], author='', released='',
+                data=data, basic=False, sid2=0, sid3=0, clock='NTSC' if ntsc else 'PAL',
+                calls=calls, prg=dict(a=a, calls=calls, ntsc=bool(ntsc)))
+
+
 def cia_timed(t, song):
     """the song's speed bit: 1 = timed by CIA 1 timer A, 0 = once a frame"""
     bit = min(song - 1, 31)

@@ -123,8 +123,9 @@ g_jitter = 48                   ; measured: tests/jitter.py
 g_share = 35                    ; the most of the CPU the loader may take
 g_border = 1                    ; it leaves the border to the loader (gk_bord)
 g_sfx = 1                       ; it makes effects on voice 3 (0: it makes none)
-g_wait = 1                      ; it keeps -wait: once loaded it stays, until SPACE (or a game's end)
+g_wait = 1                      ; it keeps -wait: once loaded it stays, until SPACE
 g_count = 1                     ; its status line counts blocks with -countdown (the kit's)
+g_end = 1                       ; it keeps -waitgame: once loaded it stays, until a game ends (gk_done)
 ...
 *=$e000
         incasm "modhead.asm"
@@ -150,13 +151,13 @@ It writes the 32-byte header. Byte by byte:
 | +24 | the music: 1 SlopLoad's own player at $C000 (voice 3 is yours for effects; given only to a module with `g_sfx`, and to the show module), 2 any other tune, or the player where it can't go at $C000 (all three voices) | the tool |
 | +25 | (the show module's VIC bank) | the tool |
 | +26 | the program's disk blocks (254 bytes; 250 at most) that load while the module runs: all of them, unless part of the program loads into the module's memory after it | the tool |
-| +27 | bit 0: the module leaves the border alone while `ld_state` bit 5 is set (`-showstripes` needs it); bit 1: it makes sound effects on voice 3 when the music lets it (+24 = 1); bit 2: it keeps `-wait` (+28 bit 1); bit 3: its status line counts blocks with `-countdown` (+28 bit 3); bit 4: second in a chain, it plays on the tune the first started (+28 bit 4) | `g_border`, `g_sfx`, `g_wait`, `g_count`; bit 4 the kit's (`gk_chain`) |
-| +28 | the tool's options: bit 1 `-wait`, bit 3 `-countdown`, bit 4 a chain's tune already playing (the show module's own: bit 0 the fade, which the tools now always set, bit 2 a hires picture) | the tool |
+| +27 | bit 0: the module leaves the border alone while `ld_state` bit 5 is set (`-showstripes` needs it); bit 1: it makes sound effects on voice 3 when the music lets it (+24 = 1); bit 2: it keeps `-wait` (+28 bit 1); bit 3: its status line counts blocks with `-countdown` (+28 bit 3); bit 4: second in a chain, it plays on the tune the first started (+28 bit 4); bit 5: a game that keeps `-waitgame` (+28 bit 5); bit 6 (the show module's): a picture made to draw in (its maker's option: `picturelm.py -drawin`, PICTURE-LM's line 9; +28 bit 6 when the tools do) | `g_border`, `g_sfx`, `g_wait`, `g_count`, `g_end`; bit 4 the kit's (`gk_chain`) |
+| +28 | the tool's options: bit 1 `-wait` (SPACE), bit 5 `-waitgame` (a game's end; never both), bit 3 `-countdown`, bit 4 a chain's tune already playing (the show module's own: bit 0 the fade, which the tools now always set, bit 2 a hires picture, bit 6 the picture draws in: its screen, bank+$0C00-$0FE7 (to $0FFF with sprites, whose pointers are in it), and bitmap, bank+$2000-$3F3F, load after its init, which clears them first) | the tool |
 | +29 | to +31: spare (the show module's run on) | |
 
 The tool reads bytes 4-14 and 27 and writes 13-26 and 28 on the copy it
-puts on the tape, and refuses `-wait` or `-countdown` for a module that
-doesn't say it keeps them (byte 27). Byte 27's bit 4 is set by
+puts on the tape, and refuses `-wait`, `-waitgame` or `-countdown` for a
+module that doesn't say it keeps them (byte 27). Byte 27's bit 4 is set by
 `modhead.asm` itself: the kit's `sidinit` and `musicgo` keep it (below). If your character set starts at the
 load address (as in both games), the header is characters 0-3: never
 show them, and call `gk_musinit` first in `init`, before anything draws
@@ -324,6 +325,16 @@ picture). Nothing changes for either module, with two exceptions:
 - **Memory.** B's parts load while A runs, so A and B can't share any
   memory, and neither can the tune. The program's bytes in A's memory
   load once B runs.
+- **The music first.** With a tune, the tools' default (`-musicstart
+  before`; SlopLoad 64's line 5: 1) has the tune start before any module
+  loads: SlopLoad's own show module plays it, the screen off, while the
+  module's parts load, then hands over (its header's +78 to +86: the
+  blocks in by then, the module's init, frame and stop, the progress a
+  page; the core's vectors from then on). The module's +28 bit 4 says
+  the tune is playing already, as for a chain's second: `musicgo` plays
+  it on. Its init then calls `gk_keep` in its long loops and `gk_kend`
+  last (above), so the tune keeps time while it draws; a module that
+  doesn't keep +27 bit 4 has the tune start with it instead.
 - **The tune plays on.** The tool writes the music's fields into both
   headers. A starts the tune as usual; B is called with header +28 bit
   4 set, which means the tune is already playing. The kit's `sidinit`
@@ -370,9 +381,11 @@ are the behaviour every module has, written once:
 | `minit`, `mplay`, `mflags` | the music's entry points; call `mplay` once a tick when `musicon` (once `gk_exit` has begun the fade, it plays the fade); `mflags` 1 = SlopLoad's player at $C000 (voice 3 is yours), 2 = any other tune: leave voice 3 alone too (no effects) |
 | `soundkey` | S turns the music off and on (once a tick) |
 | `readfire` | fire on joystick port 2: `fpress` = $10 on a fresh press; with `dbg_auto` set, your `autopilot` plays |
-| `startkey` | once loaded, sets `exitreq`: at once, or with the tool's `-wait` on a fresh SPACE (call it once a tick) |
-| `gk_done` | a game over: once loaded, sets `exitreq` (carry set; carry clear while loading). With `-wait`, the end of a game starts the program too |
-| `gk_exit` | the frame's last call (`jmp gk_exit`): carry set when the module may end. With `exitreq` set and music playing, it starts the fade instead (2.6 seconds, `mplay` playing it) and sets the carry once it's done; with no music, at once |
+| `startkey` | once loaded, sets `exitreq`: at once, or with the tool's `-wait` on a fresh SPACE; with `-waitgame`, never (`gk_done` does) (call it once a tick) |
+| `gk_done` | a game over: once loaded, sets `exitreq` (carry set; carry clear while loading). With `-wait` (SPACE alone) it doesn't: carry clear, and the game goes on to a new one |
+| `gk_keep` | in a long init (more than a frame of drawing), called in its loops at least once a frame: a tune that's playing already (the music first's, or a chain's: header +28 bit 4) gets a play call at each new frame, so it keeps time while the screens are drawn. Nothing otherwise (or once the module plays the tune itself). Keeps a, x, y |
+| `gk_kend` | a long init's last call: with a tune playing already, on until `gk_keep`'s next play call, so the module's own first, in its first frame, comes about a frame after it |
+| `gk_exit` | the frame's last call (`jmp gk_exit`): carry set when the module may end. Until the module first plays the tune itself, it calls `gk_keep` too. With `exitreq` set and music playing, it starts the fade instead (2.6 seconds, `mplay` playing it) and sets the carry once it's done; with no music, at once |
 | `status` | the status line (once a frame): with `-countdown` the blocks still to load in place of the percent |
 | `random` | 16-bit LFSR, A = a new byte |
 | `gk_bord` | the border = A, unless it is the loader's (`ld_state` bit 5); keeps A, X and Y |
@@ -394,7 +407,7 @@ It needs from you, by these names:
   "LOADED! PRESS SPACE TO START THE GAME";
 - `autopilot`: returns A = 0 to press fire, $10 not;
 - the fade: `incasm "fadekit.asm"` anywhere it fits (about 300 bytes;
-  Flappy-Load and Bounce-Load put it in a second part at $CE80, Crossy-Load
+  Flappy-Load and Bounce-Load put it in a second part at $CD90 and $CDA0, Crossy-Load
   in its low part), and its scratch `fsh`, `fkn`, `fsv` (25, 25 and 34
   bytes, untouched while the module still runs once the program is in):
   `incasm "fadescr.asm"` makes them bytes; a loading screen can point
@@ -409,10 +422,11 @@ program is in (OZ GOLD, below).
 
 - **The status line** (one text row, top or bottom): LOADING, a 20-cell
   bar and the percent while it loads; TAPE ERROR, flashing, after a
-  tape error (rewinding a little and pressing PLAY recovers); LOADED!
-  PRESS SPACE TO START THE GAME once it's in, with `-wait`. With the tool's
+  tape error (rewinding a little and pressing PLAY recovers); once it's
+  in, LOADED! PRESS SPACE TO START THE GAME with `-wait`, else LOADED!
+  (while the music fades, or until the game ends). With the tool's
   `-countdown` (header +28 bit 3), the blocks still to load ("024",
-  down to 000 as the loader kits of the 1980s and TND's showed them) in
+  down to 001, then LOADED!, as the loader kits of the 1980s and TND's showed them) in
   place of the percent: the kit's `status` does it, from header +26, so
   a module that uses it says `g_count = 1`.
 - **When the program starts** (set `exitreq`): as soon as it's in. A
@@ -422,14 +436,19 @@ program is in (OZ GOLD, below).
   the kit's `gk_exit` and `fadekit.asm`; a game plays on meanwhile);
   with no music, at once. A loading screen ends by itself (OZ GOLD and
   PETSCII-Load show 000 while their music fades).
-  Only if whoever masters the tape asks for it, with the tool's `-wait`
-  (header +28 bit 1; SlopLoad 64 asks with the module), does the module
-  stay (`g_wait = 1` says it can):
-  - a game until SPACE (`startkey`) or the end of a game (`gk_done`,
-    called at game over), the player playing on round after round, LOADED!
-    PRESS SPACE TO START THE GAME on the status line;
-  - a loading screen at its end (OZ GOLD and PETSCII-Load: 000 on the
-    counter, the music on) until SPACE, then as without it (the fade).
+  Only if whoever masters the tape asks for it does the module stay
+  (SlopLoad 64 asks with the module: "once the program is in, it starts:
+  1 at once, 2 when space is pressed, 3 when the game ends", offering
+  what the module keeps):
+  - with the tool's `-wait` (header +28 bit 1; `g_wait = 1` says it
+    can), until SPACE alone (`startkey`): a game plays on, game after
+    game (`gk_done` doesn't end it), LOADED! PRESS SPACE TO START THE
+    GAME on the status line; a loading screen holds at its end (OZ GOLD
+    and PETSCII-Load: 000 on the counter, the music on), then as without
+    it (the fade);
+  - with the tool's `-waitgame` (header +28 bit 5; `g_end = 1` says it
+    can: games only), until the game ends: the player plays on to game
+    over (`gk_done`, called there), and SPACE does nothing.
   Whether and how a module tells the player to press SPACE is its own
   choice: the kit's status line says LOADED! PRESS SPACE TO START THE
   GAME, OZ GOLD writes PRESS SPACE on its tape error row, and PETSCII-Load
@@ -543,14 +562,20 @@ sits in the module's memory.
    percent; without `-wait` the module ends within a few ticks of the
    load (a loading screen after its fade), with no key; with `-wait` it
    stays until SPACE (`--end space`), and a game played on past the load
-   ends at its game over (`--end game`).
+   goes on past its game over until SPACE (`--end game`); with
+   `--waitgame` a game played on past the load ends at its game over.
 
 ## Before you share it
 
 - `g_jitter` measured, `g_claim` covering every buffer, `g_share` what
   the profile showed;
+- with a tune (the music first, the default), `tests/musicfirst.py
+  --module path/to/mymodule.lm` (and `--ntsc`): the tune's play calls
+  through the hand-over and your init no more than 1.5 frames apart
+  (`gk_keep` in its long loops, `gk_kend` last);
 - the status line, SPACE, S and fire on port 2 as above, and the program
-  starting as soon as it's in, and with `-wait` on SPACE or a game's end;
+  starting as soon as it's in, with `-wait` on SPACE, and with
+  `-waitgame` at a game's end;
 - no `sei`, no raster interrupts, at most two sprites on a line (in its
   `g_jitter`), nothing at $FFFA-$FFFF;
 - the tests above passed on PAL, NTSC and a C128;
@@ -666,5 +691,5 @@ after the first, 000 drawn by then, the screen on and the SID silent.
 | play field | scrolls left 2 px a tick, double-buffered | rows 5-20 (eight lanes), scrolls up smoothly, double-buffered; lanes redrawn while the beam is away | rows 2-22, columns 4-35 (a shaft, 256 pixels); girders fall smoothly with no scrolling: six characters redrawn in the vertical blank, one screen | rows 2-22, a town of 16 blocks in columns 4-35 on a street (row 23); nothing scrolls: the charge's two characters, a blast's four and a new town's rows drawn in the vertical blank, one screen | rows 2-23, columns 4-35 in a frame; a wall of 16 bricks by 8 rows (rows 4-11); nothing scrolls: the soft sprites' cells, bricks and rows written in the vertical blank, one screen |
 | player | a bird in 9 characters (soft sprite) | a hen in 9 characters | a rocket, one multicolour sprite | a plane, one multicolour sprite (8 lines: one character row) | a bat (12 multicolour pixels by 5 lines) and a ball (3 by 6), soft sprites in up to 8 characters, two sets taking turns |
 | characters | 128, ASCII text codes | 128, packed text codes | 128, ASCII text codes; multicolour girders and rock | 128, ASCII text codes; multicolour blocks (three styles), street, charge and blasts | 128, ASCII text codes; multicolour bricks (plain, tough, cracked) and frame; 107-127 hold the wall and the soft sprites' cells at run time |
-| memory | $E000-$FBFF, and the fade at $CE80-$CFFB (a second part) | $C94F-$CFFE (the fade in it) and $E000-$FFF9 (two parts), and $0200-$0255 (a buffer, two tables, five variables) | $E000-$F781 | $E000-$F8A6 | $E000-$FBE6, the fade at $CE80-$CFFB (a second part), a map of the field at $FC28-$FFBF (run time: claimed, not on the tape), and $0200-$0253 (two rows' colours) |
+| memory | $E000-$FBFF, and the fade at $CD90-$CFF7 (a second part) | $C8E0-$CFFB (the fade in it) and $E000-$FFF9 (two parts), and $0200-$0255 (a buffer, two tables, five variables) | $E000-$F82C | $E000-$F954 | $E000-$FBCB, the fade at $CDA0-$CFF3 (a second part), a map of the field at $FC28-$FFBF (run time: claimed, not on the tape), and $0200-$0253 (two rows' colours) |
 | round ends | the bird crashes | the hen dies (traffic, river, swept away, train) | the rocket touches a girder | the plane flies into a block | the last of three balls is lost |

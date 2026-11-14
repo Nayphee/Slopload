@@ -27,6 +27,12 @@ Options (only the ones that differ from the defaults are needed):
                      Art Studio, Doodle and 13 more: made into the picture
                      module here, as PICTURE-LM does on a C64), or none
                      (the default: the screen off, or the -sid tune alone)
+  -drawin            a picture as the first module draws in: it starts
+                     first, its bitmap cleared, and its colours, screen
+                     and bitmap load while it shows, appearing as they
+                     come (about 5-8 s more at speed 0); without it the
+                     picture loads whole, then shows. A .lm draws in if
+                     it was made to (picturelm.py -drawin, PICTURE-LM)
   -then FILE         a second module after the first (-module): the first
                      shows while the second's parts load, then the second
                      while the program loads (module chaining: a PETSCII
@@ -35,21 +41,26 @@ Options (only the ones that differ from the defaults are needed):
                      PETSCII screen) or a picture in one of picturelm.py's
                      formats, made into the picture module (-wait, -fade
                      and -sprite go to it). The tune plays on through
-                     both; a PETSCII screen's counter, first, counts the
+                     both (-musicstart: from before the first, or
+                     with the first or second); a PETSCII screen's counter, first, counts the
                      second module's blocks down to 000. A PETSCII screen
                      in a chain is built at $A000, clear of a picture
   -show MODE         module, none or music: what -module and -sid say
                      already (a module; the tune alone, the screen off;
                      nothing), so seldom needed
   -wait              hold the end of the load for the player: without it
-                     the module or show ends as soon as the program is in
-                     (a game mid-round too) and the program starts. With a
-                     picture, PRESS SPACE OR FIRE across its bottom row
-                     (joystick port 2); with a module that keeps it (its
-                     header's byte 27: the demo modules do), SPACE, or for
-                     a game the end of a game: the player plays on until
-                     then; a loading screen (OZ GOLD, a PETSCII screen)
-                     holds at 000
+                     (or -waitgame) the module or show ends as soon as the
+                     program is in (a game mid-round too) and the program
+                     starts. With a picture, PRESS SPACE OR FIRE across its
+                     bottom row (joystick port 2); with a module that keeps
+                     it (its header's byte 27: the demo modules do), SPACE
+                     alone: a game plays on, game after game, until then;
+                     a loading screen (OZ GOLD, a PETSCII screen) holds
+                     at 000
+  -waitgame          with a game module that keeps it (its header's byte
+                     27, bit 5: the demo games do): once the program is
+                     in, the player plays on to the end of the game, and
+                     the program starts then (not with -wait)
   -countdown         with a module whose status line counts (the demo
                      games): the blocks still to load ("024", down to
                      000) in place of the percent
@@ -67,11 +78,24 @@ Options (only the ones that differ from the defaults are needed):
                      fades out now, about 2.6 seconds once the program is
                      in, and after -wait's key, before the program starts)
   -sid FILE          the music: a .sid (-song N: its song N, else its
-                     own default) or a .slm (sidstrip.py's); the demos
-                     are music/build/enigma.sid, slopload.sid and
-                     ozgold.sid. A tune in SlopLoad's own player (those
-                     are) goes at $C000 where it can: there a module
-                     that makes sound effects keeps them (voice 3)
+                     own default), a .slm (sidstrip.py's) or a C64 PRG
+                     tune (any other file: a music editor's, such as
+                     DMC, EMS or Future Composer; its load address its
+                     first two bytes): -init HHHH and -inita HH (hex:
+                     lda #$HH, jsr $HHHH; the defaults its load address
+                     and 00), -play HHHH (jsr $HHHH; three past the load
+                     address), -calls N (play calls a frame, 1-8; 1) and
+                     -clock pal|ntsc (the machine it was made for; pal).
+                     The demos are music/build/enigma.sid, slopload.sid
+                     and ozgold.sid. A tune in SlopLoad's own player
+                     (those are) goes at $C000 where it can: there a
+                     module that makes sound effects keeps them (voice 3)
+  -musicstart WHEN   with a module and -sid: when the tune starts, before
+                     (the default: before anything else loads, SlopLoad's
+                     player playing it while the module's parts load),
+                     first (with the first module) or second (with -then's
+                     module: the first is silent, its sound effects on).
+                     It plays on to the end of the load either way
   -scroll TEXT       with a PETSCII screen: a message scrolling across a
                      row ({n}: screen code n); -scrollrow N (0-24, default
                      24: the rows next to it must be empty), -scrollspeed
@@ -85,6 +109,11 @@ Options (only the ones that differ from the defaults are needed):
   -font FONT.64c     with a PETSCII screen: drawn in a font of its own (a
                      .64c, as Petmate imports one; a .petmate screen in an
                      imported font brings it with it)
+  -screech           with a PETSCII screen: Novaload's loading noise, the
+                     program's bytes as they load played as voice 1's pitch
+                     (a sawtooth). It has the SID: a tune playing is cut
+                     off when the screen starts; with a second module
+                     (-then) the tune starts with that one instead
   -speed N           -12 (slowest, the most margin) to 13; 0 the default:
                      the same margin on the tape as slushload's speed N
                      (+-(19 - N) x 4 cycles; below 0, 4 more a step, for
@@ -227,12 +256,17 @@ STRIPES = {
     'fire': [2, 8, 7], 'ice': [6, 14, 3, 1], 'grey': [11, 12, 15], 'sunset': [4, 2, 8, 7],
     'stealth': [0, 11], 'gold': [9, 8, 7], 'candy': [10, 4, 14], 'black': [0],
 }
-# loading line effects (-stripes NAME[:N][,B]: core_fx): the interrupt's 8
+# loading line effects (-stripes NAME[:N][,B]: core_fx): the interrupt's 10
 # bytes where the core has stx $d020, each pulse, as classic loaders did
 # it; the cycles they take beyond stx's 4 (the shortest pulses that much
-# longer). and and ora take the byte coming in off the tape (ld_sr).
-FX = {'classic': 8, 'thin': 10, 'mixed': 10, 'and': 6, 'ora': 6, 'eor': 6}
-FX_VALUE = ('and', 'ora', 'eor')        # these take a value (0-15)
+# longer: the 8-byte ones 2 more for their cmp #$00, line's two loads and
+# stores filling the 10). and and ora take the byte coming in off the
+# tape (ld_sr). line: a line of its own colour (N) on a border of B, every
+# pulse (lda #N : sta $d020 : lda #B : sta $d020); its -cycle steps B a
+# block at a time, not the border a page
+FX = {'classic': 10, 'thin': 12, 'mixed': 12, 'and': 8, 'ora': 8, 'eor': 8, 'line': 8}
+FX_VALUE = ('and', 'ora', 'eor', 'line')        # these take a value (0-15: line's, its colour)
+FX_LEN = 10                                     # (tools/build.py's: the effect's bytes)
 CYCLE_COST = 3              # -cycle: inc $d020 where the core skips 3 bytes, on a page crossing
 GAME_JITTER_DEFAULT = 48
 # a loading sprite's cost (-sprite): what it adds to the worst edge timing
@@ -351,6 +385,41 @@ def subtract(rng, cut):
     return out, (inside if inside[0] < inside[1] else None)
 
 
+DRAW_IN = ((0x0c00, 0x1000), (0x2000, 0x3f40))     # a picture's screen and bitmap, in its VIC bank
+# a picture with sprites: the 24 bytes after its screen's 1,000 are its too
+# (its screen part 1,024 bytes), for the VIC reads the sprites' pointers
+# at screen + $3f8: the two loading sprites' ($fd, $fe: bank + $3f40, +
+# $3f80). A program's bytes there then load after the show, as the rest
+# under the picture does, and not over the pointers while it shows
+SPRITE_TAIL = bytes(16) + bytes([0xfd, 0xfe]) + bytes(6)
+
+
+def draw_split(parts, bank):
+    """a picture module's parts (address, bytes, io) for its drawing in:
+    (first, drawn). first: what starts it (its code, a .lm's colours, the
+    sprites, a tune); drawn: what loads while it shows, colour RAM (io)
+    first, then its screen and bitmap (DRAW_IN in the bank), by address"""
+    pb = bank * 0x4000
+    cuts = [(pb + lo, pb + hi) for lo, hi in DRAW_IN]
+    first, drawn = [], []
+    for a, d, io in parts:
+        if io:
+            drawn.append((a, d, io))
+            continue
+        pieces = [(a, a + len(d))]
+        for c in cuts:
+            nxt = []
+            for rng in pieces:
+                out, inside = subtract(rng, c)
+                nxt += out
+                if inside:
+                    drawn.append((inside[0], d[inside[0] - a:inside[1] - a], False))
+            pieces = nxt
+        first += [(lo, d[lo - a:hi - a], False) for lo, hi in pieces]
+    drawn.sort(key=lambda p: (not p[2], p[0]))
+    return first, drawn
+
+
 def pilot_len(seconds, h):
     return max(300, int(seconds * T.PAL_HZ / (4 * h)))
 
@@ -359,15 +428,17 @@ ALIASES = {'mixtape': 'tapeside', 'analyze': 'analyse', 'measure': 'core'}
 # what each kind of run uses: an option typed that the run doesn't use is
 # refused, not ignored
 SOUND_OPTS = {'rate', 'bitrate', 'invert'}
+PRG_OPTS = ('init', 'inita', 'play', 'calls', 'clock')     # a PRG tune's (-sid tune.prg)
 TAPE_OPTS = {'speed', 'bootspeed', 'blocksize', 'leader', 'precomp', 'hires', 'core', 'stripes', 'showstripes',
              'cycle'}
 SIDE_ONLY = {'tape', 'side', 'margin', 'random'}
 MODE_OPTS = {
     'master': TAPE_OPTS | SOUND_OPTS | {'filename', 'module', 'start', 'status', 'autorun', 'nomotor',
-                                        'music', 'sid', 'song', 'show', 'picture', 'scroll', 'scrollrow',
-                                        'scrollspeed', 'scrollcolours', 'counter', 'screen', 'font',
-                                        'fade', 'wait', 'countdown', 'sprite', 'spritepos', 'spritecolours',
-                                        'spritespeed', 'spritemc', 'spriteexpand', 'then'},
+                                        'music', 'sid', 'song', 'init', 'inita', 'play', 'calls', 'clock',
+                                        'show', 'picture', 'scroll', 'scrollrow',
+                                        'scrollspeed', 'scrollcolours', 'counter', 'screen', 'font', 'screech',
+                                        'fade', 'wait', 'waitgame', 'countdown', 'drawin', 'sprite', 'spritepos', 'spritecolours',
+                                        'spritespeed', 'spritemc', 'spriteexpand', 'then', 'musicstart'},
     'tapeside': TAPE_OPTS | SOUND_OPTS | SIDE_ONLY | {'tapeside'},
     'calibrate': SOUND_OPTS | {'calibrate', 'jitter'},
     'analyse': {'analyse', 'jitter', 'out'},
@@ -391,6 +462,10 @@ def check_given(o, mode, out=None):
             raise Fail(f"-tapeside: -{k} doesn't go on a tape side (each program is named after"
                        " its file, starts with RUN, and loads with no module, music or picture)")
         raise Fail(f"-{k} doesn't go with -{mode}" if mode != 'master' else f"-{k} isn't used here")
+    if 'rate' in given and not 8000 <= (o.get('rate') or 0) <= 192000:
+        raise Fail("-rate must be 8000 to 192000 (the sound's samples a second: 44100 if not given)")
+    if 'bitrate' in given and not 32 <= (o.get('bitrate') or 0) <= 320:
+        raise Fail("-bitrate must be 32 to 320 (an .mp3's kbit/s: 320 if not given)")
     ext = os.path.splitext(out or '')[1].lower()
     if out is not None and ext not in ('.wav', '.mp3'):
         for k in ('rate', 'bitrate', 'invert'):
@@ -412,7 +487,8 @@ def parse_args(argv):
             k = a.lstrip('-').lower()
             if k == 'autorun':
                 opts['autorun'] = True
-            elif k in ('nomotor', 'invert', 'random', 'showstripes', 'fade', 'wait', 'countdown', 'cycle',
+            elif k in ('nomotor', 'invert', 'random', 'showstripes', 'fade', 'wait', 'waitgame', 'countdown',
+                       'cycle', 'drawin', 'screech',
                        'spriteexpand'):
                 opts[k] = True
             elif k in ('tapeside', 'mixtape'):
@@ -432,7 +508,7 @@ def parse_args(argv):
                        'rate', 'bitrate', 'show', 'picture', 'sid', 'song', 'stripes',
                        'tape', 'side', 'margin', 'scroll', 'scrollrow', 'scrollspeed', 'scrollcolours',
                        'counter', 'screen', 'font', 'sprite', 'spritepos', 'spritecolours', 'spritespeed',
-                       'spritemc', 'then'):
+                       'spritemc', 'then', 'musicstart', 'init', 'inita', 'play', 'calls', 'clock'):
                 if i + 1 >= len(argv):
                     raise Fail(f"{a} needs a value")
                 v = argv[i + 1]
@@ -451,6 +527,13 @@ def parse_args(argv):
             pos.append(a)
         i += 1
     return opts, pos
+
+
+def ending_bits(o):
+    """a module's header +28, the tool's options that end it: bit 1
+    -wait (SPACE), bit 5 -waitgame (a game's end), bit 3 -countdown"""
+    return ((2 if o.get('wait') else 0) | (0x20 if o.get('waitgame') else 0)
+            | (8 if o.get('countdown') else 0))
 
 
 def find_game(spec, o=None, chain=False, parts=None):
@@ -472,7 +555,7 @@ def find_game(spec, o=None, chain=False, parts=None):
     if spec.lower().endswith(P.ENDINGS + ('.lm',)) and not os.path.exists(spec):
         raise Fail(f"no file {spec}")
     o = o or {}
-    pet = ('scroll', 'scrollrow', 'scrollspeed', 'scrollcolours', 'counter', 'screen', 'font')
+    pet = ('scroll', 'scrollrow', 'scrollspeed', 'scrollcolours', 'counter', 'screen', 'font', 'screech')
     if any(o.get(k) is not None for k in pet) and not spec.lower().endswith(P.ENDINGS):
         raise Fail(f"-{next(k for k in pet if o.get(k) is not None)} goes with a PETSCII screen as -module"
                    " (a .pet, .petmate or .c file)" + (" or -then" if chain else ""))
@@ -633,6 +716,9 @@ def master(prg, tap, o, quiet=False):
         raise Fail("-status must be a byte, $00 to $FF")
     if o['leader'] < 256:
         raise Fail("-leader must be 256 pulses or more (the KERNAL finds the header by it)")
+    if 'status' in (o.get('given') or ()) and o['start'] is None:
+        raise Fail("-status goes with -start ADDR (the port's value at the jump; a program started with RUN"
+                   " gets BASIC's own)")
     # ---- what shows while the program loads (SHOWS): the module (a
     # picture made into one here), the tune alone, or nothing
     given = o.get('given') or set()
@@ -659,8 +745,8 @@ def master(prg, tap, o, quiet=False):
             'music': 'music'}
     if 'module' in given and show in ('none', 'music') and str(o['module']).lower() != 'none':
         raise Fail(f"-module goes with -show module (the default): -show {show} shows {what[show]}")
-    pet = [k for k in ('scroll', 'scrollrow', 'scrollspeed', 'scrollcolours', 'counter', 'screen', 'font')
-           if o.get(k) is not None]
+    pet = [k for k in ('scroll', 'scrollrow', 'scrollspeed', 'scrollcolours', 'counter', 'screen', 'font',
+                       'screech') if o.get(k) is not None]
     if pet and show != 'module':
         raise Fail(f"-{pet[0]} goes with a PETSCII screen as -module (-show module): -show {show}"
                    f" shows {what[show]}")
@@ -679,6 +765,12 @@ def master(prg, tap, o, quiet=False):
     if o.get('wait') and show not in ('picture', 'picmusic', 'module'):
         raise Fail(f"-wait goes with a picture (-module PICTURE: its prompt shows on the picture)"
                    f" or a module that keeps it; -show {show} shows {what[show]}")
+    if o.get('wait') and o.get('waitgame'):
+        raise Fail("-wait and -waitgame: one ending or the other (SPACE, or the end of a game)")
+    if o.get('waitgame') and (show != 'module' or pic_first or pic_then):
+        raise Fail("-waitgame goes with a game module (the end of a game); "
+                   + ("a picture has no game: -wait for its SPACE OR FIRE" if pic_first or pic_then
+                      else f"-show {show} shows {what[show]}"))
     if o.get('countdown') and show != 'module':
         raise Fail(f"-countdown goes with a module's status line (-show module); -show {show} shows"
                    f" {what[show]}")
@@ -686,33 +778,51 @@ def master(prg, tap, o, quiet=False):
     if show == 'none':
         game = None
     elif show == 'module' and pic_first:
+        if pet and not b_scr:                       # (no PETSCII screen in this chain)
+            raise Fail(f"-{pet[0]} goes with a PETSCII screen as -module or -then (a .pet, .petmate or .c"
+                       " file)")
         import picturelm as PL
         try:
-            parts = PL.make(o['module'], {})
+            parts = PL.make(o['module'], {'drawin': o.get('drawin')})
         except PL.Bad as ex:
             raise Fail(str(ex))
         game = find_game(o['module'], {}, parts=parts)
         game['label'] = f"{os.path.basename(o['module'])} ({picture_file(o['module'])}), as the picture module"
     elif show == 'module':
         game = find_game(o['module'], {} if b_scr else o, chain=bool(then))
+    else:
+        game = find_game(os.path.join(BUILD, 'modules', 'show.prg'))     # (the tool's own)
+        if show in ('picture', 'picmusic'):
+            pic = load_picture(o['picture'])
+    if show == 'module':
         last = chainb or game                       # (the module showing when the program is in)
         gflags = last['data'][27] if len(last['data']) > 27 else 0
         for k, bit, what in (('wait', 4, "-wait (SPACE alone starts the program once it's in)"),
+                             ('waitgame', 32, "-waitgame (the end of a game starts the program)"),
                              ('countdown', 8, "-countdown (its status line counting the blocks)")):
             if o.get(k) and not gflags & bit and not (pic_then and k == 'wait'):
                 raise Fail(f"{last.get('path', 'the module')}: it doesn't keep {what}: its header's byte 27,"
                            f" bit {bit.bit_length() - 1} (MODULES.md)" +
                            ("; OZ GOLD counts blocks itself, a PETSCII screen with -counter ROW,COL"
                             if k == 'countdown' else ""))
-    else:
-        game = find_game(os.path.join(BUILD, 'modules', 'show.prg'))     # (the tool's own)
-        if show in ('picture', 'picmusic'):
-            pic = load_picture(o['picture'])
+    if o.get('drawin'):                         # a picture drawn in: its maker's option (+27 bit 6)
+        if show in ('picture', 'picmusic'):     # (the tool's own picture module: set once
+            pass                                # it is placed, below)
+        elif pic_then and not pic_first:
+            raise Fail("-drawin: a picture second in a chain (-then) loads while the first shows and appears"
+                       " whole; -drawin goes with a picture as the first module")
+        elif not (show == 'module' and len(game['data']) > 28 and game['data'][27] & 0x40):
+            raise Fail("-drawin goes with a picture as the first module (-module PICTURE, or a .lm made to draw"
+                       " in: picturelm.py -drawin, PICTURE-LM's line 9)"
+                       + (f"; {os.path.basename(o['module'])} wasn't" if show == 'module' else ""))
     spr = None
     sopts = [k for k in ('spritepos', 'spritecolours', 'spritespeed', 'spritemc', 'spriteexpand') if o.get(k)]
     if sopts and not o.get('sprite'):
         raise Fail(f"-{sopts[0]} goes with -sprite FILE")
     if o.get('sprite') and not pic_then:            # (-then's picture: in its module's header)
+        if pic_first:
+            raise Fail("-sprite: in a chain the sprites go over -then's picture; over the first module's,"
+                       " make the picture a .lm with its sprites (picturelm.py -sprite, PICTURE-LM)")
         if show not in ('picture', 'picmusic'):
             raise Fail(f"-sprite goes with a picture (-module PICTURE, or -then PICTURE): the"
                        " sprites show over it")
@@ -768,9 +878,8 @@ def master(prg, tap, o, quiet=False):
     if o.get('cycle'):                          # inc $d020 at each page: the worst path 3 more
         pmin_boot += CYCLE_COST
         pmin_game += CYCLE_COST
-        if game and not o.get('showstripes'):
-            raise Fail("-cycle with a module or a show needs -showstripes: the border is theirs while they"
-                       " run, and the colour would still step on under them")
+        if game:                                # the lines on through the module (the border
+            o['showstripes'] = True             # is its otherwise: the colour would step unseen)
     if o.get('showstripes'):                # the loading lines through the show too
         if not game:
             raise Fail("-showstripes goes with a module or music (-module FILE, or -sid FILE alone)")
@@ -779,10 +888,12 @@ def master(prg, tap, o, quiet=False):
         for g in ([game] + ([chainb] if chainb else [])) if show == 'module' else []:
             if not (len(g['data']) > 27 and g['data'][27] & 1):
                 raise Fail(f"{g.get('path', 'the module')}: it doesn't leave the border to the loader (its"
-                           " header's byte 27: MODULES.md), so -showstripes can't go with it")
+                           " header's byte 27: MODULES.md), so -showstripes (or -cycle, which keeps the lines"
+                           " on) can't go with it")
     h_game = min(H_MAX, ceil4(speed_h(o['speed']) + jit))
     h_chain = min(H_MAX, ceil4(speed_h(o['speed']) + jit_a)) if chainb else None
     h_boot = max(H_MIN_BOOT, speed_h(o['bootspeed']))
+    h_pre = max(H_MIN_BOOT, speed_h(o['speed']))    # (the music first: the screen off, as the tune alone)
     if screen_on:
         h_live, pmin_live = h_game, pmin_game
     else:
@@ -795,6 +906,10 @@ def master(prg, tap, o, quiet=False):
     mend = maddr + len(mdata)
     if mend > 0x10000:
         raise Fail("program runs past $ffff")
+    if maddr == 0x0800 and mdata[:1] not in (b'', b'\x00'):
+        raise Fail(f"{os.path.basename(prg)} has ${mdata[0]:02X} at $0800, which the start clears (BASIC's"
+                   " zero byte before a program: the KERNAL's own start writes it): a program from $0801, or"
+                   " a 0 there")
     for lo, hi, what in LOADER_RANGES:
         if overlap((maddr, mend), (lo, hi)):
             raise Fail(f"program ${maddr:04X}-${mend - 1:04X} overlaps {what} (${lo:04X}-${hi - 1:04X})")
@@ -822,8 +937,16 @@ def master(prg, tap, o, quiet=False):
         import sidfile as SF
         if o['sid'].lower().endswith('.slm') and o.get('song') is not None:
             raise Fail("-song picks a .sid's song; a .slm's was chosen when it was made")
+        given = {k: o[k] for k in PRG_OPTS if o.get(k) is not None}
         try:
-            m = SS.load_music(o['sid'], o.get('song'))
+            prg = None                          # a PRG tune: called as -init, -play... say
+            if not o['sid'].lower().endswith('.slm') and not SF.is_sid(o['sid']):
+                if o.get('song') is not None:
+                    raise Fail("-song is a .sid's: a PRG tune's song is init's A (-inita)")
+                prg = SS.prg_opts(**given)
+            elif given:
+                raise Fail(f"-{sorted(given)[0]} is for a PRG tune: a .sid or .slm says it itself")
+            m = SS.load_music(o['sid'], o.get('song'), prg=prg)
         except (SS.Refused, SF.Bad) as ex:
             raise Fail(str(ex))
         except OSError as ex:
@@ -838,7 +961,8 @@ def master(prg, tap, o, quiet=False):
                    relocs=m.get('relocs'), workspace=list(m['workspace']), songs=m.get('songs', 1),
                    init=m['init'], play=m['play'], per_pal=m['per_pal'], per_ntsc=m['per_ntsc'],
                    flags=2, song_a=m['song'] - 1, play_cycles=m['play_clk'], sid=m,
-                   label=f"{m['name']} / {m['author']}" + (f", song {m['song']}" if m.get('songs', 1) > 1 else ""))
+                   label=(f"{m['name']} (a PRG tune)" if m.get('prg') else
+                          f"{m['name']} / {m['author']}" + (f", song {m['song']}" if m.get('songs', 1) > 1 else "")))
         # SlopLoad's own player: at $C000 a module's kit finds its stop and
         # flags, hands voice 3 to the module's effects and sets the NTSC
         # pitch; the show module too (the pitch)
@@ -847,6 +971,8 @@ def master(prg, tap, o, quiet=False):
                          and (m['load'] == 0xc000 or m.get('relocs') is not None))
     elif o.get('song') is not None:
         raise Fail("-song picks a song of a -sid tune")
+    elif any(o.get(k) is not None for k in PRG_OPTS):
+        raise Fail(f"-{[k for k in PRG_OPTS if o.get(k) is not None][0]} goes with a PRG tune: -sid FILE")
     if show == 'music' and mus is None:
         raise Fail(f"-show {show} needs a tune: -sid FILE")
     if mus:
@@ -855,7 +981,10 @@ def master(prg, tap, o, quiet=False):
         # with $0200-$03ff (the exit code goes there after the music stops)
         busy = [(lo, hi, what) for lo, hi, what in LOADER_RANGES]
         busy_ws = [(0, 0x200, 'zero page and the stack'), (0x400, 0x800, 'the core'),
+                   (0x2f9, 0x300, "the loader's exit ($02F9-$02FF: stage 1's last bytes, run at the end)"),
                    (0xfffa, 0x10000, "the CPU's vectors")]
+        if o.get('then'):                           # (the switch runs every frame, the tune playing)
+            busy_ws.append((CHAIN_AT, 0x400, "the chain's switch ($0380-$03FF, with -then)"))
         for i, (lo, hi) in enumerate(mus['claims']):
             for llo, lhi, what in (busy if i == 0 else busy_ws):
                 if overlap((lo, hi), (llo, lhi)):
@@ -932,9 +1061,12 @@ def master(prg, tap, o, quiet=False):
         game.update(addr=org, data=gdata, end=org + len(gdata), claim=labs['modend'],
                     init=labs['init'], frame=labs['frame'], stop=labs['stop'],
                     claims=[(org, labs['modend'])])
+        if pic and o.get('drawin'):             # (-drawin: the picture draws in)
+            game['data'] = bytearray(game['data'])
+            game['data'][27] |= 0x40
         if pic:
             pb = bank * 0x4000
-            pic['parts'] = [(pb + 0x0c00, pic['screen'], False)] + \
+            pic['parts'] = [(pb + 0x0c00, bytes(pic['screen']) + (SPRITE_TAIL if spr else b''), False)] + \
                 ([(0xd800, pic['colour'], True)] if pic['colour'] is not None else []) + \
                 [(pb + 0x2000, pic['bitmap'], False)] + \
                 ([(pb + 0x3f40, spr['data'], False)] if spr else [])
@@ -945,28 +1077,66 @@ def master(prg, tap, o, quiet=False):
             # play calls a frame (x 256, the most of PAL's and NTSC's) x the
             # longest call x 1.3, plus 900, out of an NTSC frame (less a
             # picture's bad lines)
-            calls256 = max(312 * 64 * 256 // mus['per_pal'], 263 * 64 * 256 // mus['per_ntsc'])
-            avail = 263 * 65 - (1000 if pic else 0)
-            need = mus['play_cycles'] * calls256 * 13 // 2560 + 900
-            game['share'] = min(85, 100 * (avail - need) // avail if need < avail else 0)
+            game['share'], calls256 = tune_share(mus, pic)
             if game['share'] < 25:
                 raise Fail(f"the tune needs {mus['play_cycles']} cycles {calls256 / 256:.1f} times a frame:"
                            " too much to load beside it")
+    ms = o.get('musicstart')
+    if ms not in (None, 'before', 'first', 'second'):
+        raise Fail(f"-musicstart {ms}: before (the default: before the modules load), first (with the first"
+                   " module) or second (with the second, -then's)")
+    if ms and not mus:
+        raise Fail("-musicstart goes with a tune (-sid)")
+    modules = show in ('module', 'picmusic')            # (a picture is a module too)
+    if ms in ('first', 'second') and not modules:
+        raise Fail(f"-musicstart {ms} goes with a module (-module): with none the tune starts as soon as it's in")
+    late = ms == 'second'                               # (the tune with the chain's second)
+    # the screech (a PETSCII screen's -screech) has the SID: it cuts a tune
+    # off, so with a second module after it the tune waits for that one
+    screech_first = bool(o.get('screech') and not b_scr)
+    cued = bool(screech_first and mus and chainb and ms is None)
+    if cued:
+        late = True
+    if late and not chainb:
+        raise Fail("-musicstart second goes with a second module (-then) and a tune (-sid): the tune"
+                   " starts when the second module does")
+    # a picture module first draws in (its header's +27 bit 6, the show
+    # module's): it starts, then its screen and bitmap load while it shows
+    # (draw_split); the music, with it, then starts before them
+    pictured = bool(game and len(game['data']) > 28 and game['data'][27] & 0x40
+                    and (pic is not None or (show == 'module' and game['data'][15] != 0xff)))
+    # the music first (the default with a module): the show module plays
+    # it, the screen off, while the module's parts load, then hands over
+    early, early_why = None, None
+    if mus and modules and ms in (None, 'before') and not pictured and not late:
+        if not (len(game['data']) > 27 and game['data'][27] & 0x10):
+            early_why = (f"{os.path.basename(game.get('path', 'the module'))} doesn't keep a tune that is"
+                         " playing (its header's byte 27, bit 4)")
+        else:
+            early = music_stage(mus, mus['claims'] + game['claims']
+                                + ([(a, a + len(d)) for a, d, io in pic['parts'] if not io] if pic else []), song)
+            if early is None:
+                early_why = "no room for its player (the show module) beside the tune and the module"
+        if early_why and ms == 'before':
+            raise Fail(f"-musicstart before: {early_why}")
     for g in [game] + ([chainb] if chainb else []) if game else []:
         g['data'] = bytearray(g['data'])
-        g['data'][13] = 0xff if song is None else song         # header: the song (both of a chain's)
         g['data'][14] = g['share']
+        if late and g is game:                                  # (-musicstart second: the first
+            g['data'][13] = 0xff                                # silent, its music fields as its
+            continue                                            # file has them)
+        g['data'][13] = 0xff if song is None else song         # header: the song (both of a chain's)
         if mus:
             g['data'][16:25] = struct.pack('<HHHHB', mus['init'], mus['play'], mus['per_pal'],
                                            mus['per_ntsc'], mus['flags'])
     if chainb:
-        if len(game['data']) > 28 and game['data'][27] & 0x0c:     # the first: no -wait or -countdown
-            game['data'][28] &= ~0x0a & 255                         # (the second ends the load)
-        if song is not None and chainb['data'][27] & 0x10:        # the second: the tune plays on
-            chainb['data'][28] |= 0x10
-        if len(chainb['data']) > 28 and chainb['data'][27] & 0x0c:
-            chainb['data'][28] = (chainb['data'][28] & ~0x0a & 255
-                                  | (2 if o.get('wait') else 0) | (8 if o.get('countdown') else 0))
+        if len(game['data']) > 28 and game['data'][27] & 0x2c:     # the first: no -wait, -waitgame
+            game['data'][28] &= ~0x2a & 255                         # or -countdown (the second ends
+                                                                    # the load)
+        if song is not None and not late and chainb['data'][27] & 0x10:   # the second: the tune
+            chainb['data'][28] |= 0x10                                      # plays on
+        if len(chainb['data']) > 28 and chainb['data'][27] & 0x2c:
+            chainb['data'][28] = (chainb['data'][28] & ~0x2a & 255 | ending_bits(o))
     if game:
         if show in ('picture', 'picmusic', 'music'):
             game['data'][15] = 0xff if pic is None else pic['bg']   # header: the picture
@@ -976,9 +1146,13 @@ def master(prg, tap, o, quiet=False):
             if spr:
                 game['data'][12] = jit                              # the jitter, with the sprites'
                 game['data'][29:76] = spr['header']
-        elif not chainb and len(game['data']) > 28 and game['data'][27] & 0x0c:   # a module that keeps -wait or
-            game['data'][28] = (game['data'][28] & ~0x0a & 255        # -countdown: those two bits
-                                | (2 if o.get('wait') else 0) | (8 if o.get('countdown') else 0))
+        elif not chainb and len(game['data']) > 28 and game['data'][27] & 0x2c:   # a module that keeps -wait,
+            game['data'][28] = (game['data'][28] & ~0x2a & 255        # -waitgame or -countdown:
+                                | ending_bits(o))                     # those bits
+        if early:                                       # the music first: the tune playing already
+            game['data'][28] |= 0x10
+        if pictured:                                    # it draws in: its picture loads after it
+            game['data'][28] |= 0x40
 
     # ---- the main program: loaded while the game runs, except what
     # falls inside the game's memory (and the music's), loaded after it stops
@@ -1061,18 +1235,23 @@ def master(prg, tap, o, quiet=False):
         put('fxb0', fx['b'][1], at=1)
         put('fxs', (cs['stripe'] + fx['pa']) & 255, at=1)
         put('fxs2', (cs['stripe'] + fx['pb']) & 255, at=1)
-    if o.get('cycle'):                            # the border a colour on each page
+    if o.get('cycle') and fx and fx['name'] == 'line':      # line: its border's colour one on a
+        to = cs['stripe'] + fx['cat']                       # block (inc there, in stron: at each
+        for i, b in enumerate((0xee, to & 255, to >> 8, 0xc9, 0x00)):    # good block's end)
+            put('fxbc', b, at=i)
+    elif o.get('cycle'):                          # the border a colour on each page
         for i, b in enumerate((0xee, 0x20, 0xd0)):
             put('cycle', b, at=i)
     if smode == 'flat':                           # (core_flat: no stripes; the border
         put('bflat', 0xa2)                        # the block's colour, ldx ld_seq, or
         put('bflat', scol, at=1)                  # one: ldx #colour)
     nomotor_auto = bool(o.get('nomotor') and later_blocks and not o['autorun'])
-    if nomotor_auto and o.get('wait'):
+    if nomotor_auto and (o.get('wait') or o.get('waitgame')):
         lo, hi = later[0]
-        raise Fail(f"-wait and -nomotor: the program's ${lo:04X}-${hi - 1:04X} loads into the module's memory"
+        w = '-wait' if o.get('wait') else '-waitgame'
+        raise Fail(f"{w} and -nomotor: the program's ${lo:04X}-${hi - 1:04X} loads into the module's memory"
                    " after it, and with a player the C64 can't stop the module must end the moment the rest"
-                   " is in: there is nothing to wait on. Leave -wait out")
+                   f" is in: there is nothing to wait on. Leave {w} out")
     if nomotor_auto:
         o['autorun'] = True                       # nothing can stop the player
     put('pt_auto', 1 if o['autorun'] else 0)
@@ -1094,6 +1273,26 @@ def master(prg, tap, o, quiet=False):
         put('pt_frame', shim['cframe'], 2)        # until then
         put('pt_stop', shim['cstop'], 2)
         put('pt_step', min(65535, round(16777216 / neff)), 2)
+
+    def nchunks(parts):
+        return sum(-(-len(p[1]) // o['blocksize']) for p in parts)
+    if early:                                     # the music first: the stage is the core's
+        boot_parts = [(mus['addr'], mus['data']), (early['addr'], early['data'])]   # module until the
+        stage_parts = ([(a, d, io) for a, d, io in (pic['parts'] if pic else [])]  # first's parts are in
+                       + [(a, d, False) for a, d in game.get('extra', [])] + [(game['addr'], game['data'], False)]
+                       + ([(shim['addr'], shim['data'], False)] if shim else []))
+        nseq = nchunks(boot_parts) + nchunks(stage_parts)
+        if nseq > 255:
+            raise Fail(f"the music first: {nseq} blocks before the module starts, 255 at most (-blocksize)")
+        h0 = early['hand']                        # its hand-over: when, to what, the progress then
+        early['data'][h0] = nseq
+        early['data'][h0 + 1:h0 + 9] = struct.pack('<HHHH', game['init'], shim['cframe'] if shim else game['frame'],
+                                                   shim['cstop'] if shim else game['stop'],
+                                                   min(65535, round(16777216 / neff)) if shim else step)
+        put('pt_init', early['init'], 2)
+        put('pt_frame', early['frame'], 2)
+        put('pt_stop', early['stop'], 2)
+        put('pt_step', min(65535, round(16777216 / max(1, sum(len(p[1]) for p in stage_parts)))), 2)
 
     # ---- stage 1, in the KERNAL file
     ss = sym('stage1')
@@ -1169,29 +1368,62 @@ def master(prg, tap, o, quiet=False):
         first[0] = False
         return p
 
-    # the game (and its music), screen off
-    if game:
+    # the game (and its music), screen off; with the music first, the
+    # tune and its player (the show module), then the game's parts while it
+    # plays (the screen still off)
+    if early:
+        def split(parts):
+            return [(a, bytes(p[1][a - p[0]:a - p[0] + o['blocksize']]), p[2] if len(p) > 2 else False)
+                    for p in parts for a in range(p[0], p[0] + len(p[1]), o['blocksize'])]
+        bb0, sb = split(boot_parts), split(stage_parts)
+        for i, (a, d, io) in enumerate(bb0):
+            emit(a, d, T.F_GAMEREADY if i == len(bb0) - 1 else 0, h_boot, pilot_next(), 0,
+                 'music first', pmin_boot)
+        done, ns = 0, sum(len(d) for _, d, _ in sb)
+        for i, (a, d, io) in enumerate(sb):
+            emit(a, d, T.F_MAINEND if i == len(sb) - 1 and not live_blocks and not chainb else 0,
+                 h_pre, pilot_next(), min(255, (256 * done) // max(1, ns)), 'module, the music playing',
+                 pmin_boot, early['share'] / 100, io=io)
+            done += len(d)
+        assert seq[0] == early['data'][early['hand']], (seq[0], early['data'][early['hand']])
+    elif game:
         gb = []
         parts = [(a, d, False) for a, d in game.get('extra', [])] + [(game['addr'], game['data'], False)]
         if pic:
             parts = pic['parts'] + parts
+        drawn = []
+        if pictured:                            # its screen and bitmap after it starts
+            parts, drawn = draw_split(parts, pic['bank'] if pic else 3 - game['data'][25])
         if mus:
             parts.insert(0, (mus['addr'], mus['data'], False))
         if shim:
             parts.append((shim['addr'], shim['data'], False))
-        for base, pdata, io in parts:
-            a = base
-            while a < base + len(pdata):
-                b = min(base + len(pdata), a + o['blocksize'])
-                gb.append((a, bytes(pdata[a - base:b - base]), io))
-                a = b
+
+        def blocks_of(parts):
+            out = []
+            for base, pdata, io in parts:
+                a = base
+                while a < base + len(pdata):
+                    b = min(base + len(pdata), a + o['blocksize'])
+                    out.append((a, bytes(pdata[a - base:b - base]), io))
+                    a = b
+            return out
+        gb, db = blocks_of(parts), blocks_of(drawn)
         # its last block starts it; with none of the program loading while
         # it runs (all of it in its memory) that block ends the main load
         # too, or the core would never stop the tape (as SlopLoad 64 does)
-        last = T.F_GAMEREADY | (0 if live_blocks or chainb else T.F_MAINEND)
+        ends = 0 if live_blocks or chainb else T.F_MAINEND
+        last = T.F_GAMEREADY | (0 if db else ends)
         for i, (a, d, io) in enumerate(gb):
             emit(a, d, last if i == len(gb) - 1 else 0, h_boot, pilot_next(), 0, 'module data',
                  pmin_boot, io=io)
+        # a picture drawn in: its colours, screen and bitmap while it shows,
+        # as the program loads then (its jitter, its share)
+        jd = game['jitter'] + (SPRITE_JITTER[spr['across']] if spr else 0)
+        for i, (a, d, io) in enumerate(db):
+            emit(a, d, ends if i == len(db) - 1 else 0, min(H_MAX, ceil4(speed_h(o['speed']) + jd)),
+                 pilot_next(), 0, 'picture drawing in', pmin_game, game['share'] / 100, io=io,
+                 jit_b=max(8, jd))
 
     # a chain's second module, the first running: its last block the switch
     if chainb:
@@ -1273,6 +1505,29 @@ def master(prg, tap, o, quiet=False):
         nb_live = blocks(nlive + 2) if nlive else 0     # (as header +26: the load address with them)
         print(f"  {nb_live} blocks load while {what}"
               + (f", {blocks(len(mdata) + 2) - nb_live} after (they fall in its memory)" if nlater else ""))
+        if early:
+            print(f"  the music first: SlopLoad's player (the show module) ${early['addr']:04X}-"
+                  f"${early['claim'] - 1:04X} starts the tune as soon as it's in, the screen off, while"
+                  f" the {'picture' if pic else 'module'}'s parts load; then the {'picture' if pic else 'module'},"
+                  " the tune playing on")
+        elif early_why:
+            print(f"  note: the music starts with the module, not before it: {early_why}")
+        if cued:
+            print("  the screech first, then the music: the tune starts with the second module"
+                  " (as -musicstart second: the screech has the SID)")
+        elif o.get('screech') and mus and not late:
+            print("  note: the screech cuts the tune off when "
+                  + ("the second module, the PETSCII screen, starts" if b_scr else "the PETSCII screen starts")
+                  + " (it has the SID): the tune plays only before it"
+                  + ("" if b_scr else "; with a second module after it (-then) the tune starts there"))
+        if pictured:
+            print("  the picture draws in: the module starts first (its code"
+                  + (", the tune" if mus and not late else "") + (", its sprites" if spr or (not pic and
+                                                                   game['data'][29]) else "")
+                  + "), clears the bitmap and puts the screen on; then "
+                  + ("colour RAM, " if pic and pic['colour'] is not None else "")
+                  + "the screen and the bitmap load while it shows, the picture appearing as they come"
+                  + (" (the tune playing)" if mus and not late else ""))
         if show == 'module':
             for g, which in ((game, 'first module' if chainb else 'module'),) + (((chainb, 'then module'),)
                                                                                   if chainb else ()):
@@ -1282,9 +1537,10 @@ def master(prg, tap, o, quiet=False):
             if chainb:
                 print(f"  the second module's {game['data'][26]} blocks load while the first runs (a counter on the"
                       f" first counts them down to 000), then it shows; the switch ${shim['addr']:04X}-"
-                      f"${shim['addr'] + len(shim['data']) - 1:04X}" + (", the tune playing on through both"
-                                                                      if song is not None else ""))
-                if song is not None and not chainb['data'][27] & 0x10:
+                      f"${shim['addr'] + len(shim['data']) - 1:04X}" +
+                      (", the tune starting with the second (-musicstart second)" if late and song is not None
+                       else ", the tune playing on through both" if song is not None else ""))
+                if song is not None and not late and not chainb['data'][27] & 0x10:
                     print(f"  note: {os.path.basename(chainb['path'])} doesn't keep a chain's music (its header's"
                           " byte 27, bit 4): it starts the tune again")
             if o.get('countdown'):
@@ -1292,6 +1548,8 @@ def master(prg, tap, o, quiet=False):
             if o.get('wait') and not pic_then:
                 print("  once the program is in, SPACE alone starts it (-wait): a game plays on, a loading"
                       " screen holds at 000")
+            if o.get('waitgame'):
+                print("  once the program is in, the end of the game starts it (-waitgame)")
             if pic_then and o.get('sprite'):
                 sp = load_sprites(o['sprite'], o)
                 print(f"  sprites: {sp['across']} at {sp['pos'][0]},{sp['pos'][1]} on the picture, in its module"
@@ -1309,7 +1567,8 @@ def master(prg, tap, o, quiet=False):
             ps = pic['bank'] * 0x4000 + 0x3f40
             print(f"  sprites: {spr['across']} at {spr['pos'][0]},{spr['pos'][1]} on the picture"
                   f" ({spr['size'][0]} x {spr['size'][1]} pixels{', multicolour' if spr['mc'] else ''}),"
-                  f" their bytes ${ps:04X}-${ps + len(spr['data']) - 1:04X}; " +
+                  f" their bytes ${ps:04X}-${ps + len(spr['data']) - 1:04X}, their pointers"
+                  f" ${ps - 0x2f48:04X}-${ps - 0x2f47:04X} (the screen's part to ${ps - 0x2f41:04X}); " +
                   (f"colour {spr['colours'][0]}" if len(spr['colours']) == 1 else
                    f"flashing through {len(spr['colours'])} colours, {spr['speed']} frames each") +
                   f"; {SPRITE_JITTER[spr['across']]} cycles of jitter more")
@@ -1326,7 +1585,8 @@ def master(prg, tap, o, quiet=False):
                 mv += ", SlopLoad's player: " + ("voice 3 for the module's effects" if show == 'module'
                                                  else "the NTSC pitch table")
             print(f"  music: \"{mus['label']}\" ${mus['addr']:04X}-${mus['addr'] + len(mus['data']) - 1:04X}"
-                  f" ({len(mus['data'])} bytes{ws}{mv}), {hz:.1f} play calls a second, up to"
+                  f" ({len(mus['data'])} bytes{ws}{mv}), init ${mus['init']:04X}, play ${mus['play']:04X},"
+                  f" {hz:.1f} play calls a second, up to"
                   f" {mus['play_cycles']} cycles each" + (f"; {len(mus['sid']['patched'])} stores taken out"
                                                             if mus['sid'] and mus['sid']['patched'] else ""))
     sets = lambda ss: ', '.join(f"{m}h={m * h}" for h, m in ss)
@@ -1439,10 +1699,11 @@ def stripe_fx(spec):
         return c
     if name in FX_VALUE:
         if not val:
-            raise Fail(f"-stripes {name}:N, N 0-15: the value to {name} with (such as {name}:5)")
-        n = colour(val.replace('$', '0x'), 'its value')
+            raise Fail(f"-stripes {name}:N, N 0-15: the value to {name} with (such as {name}:5)" if name != 'line'
+                       else "-stripes line:N,B: N the line's colour, B the border's (such as line:14,0)")
+        n = colour(val.replace('$', '0x'), "the line's colour" if name == 'line' else 'its value')
     elif val:
-        raise Fail(f"-stripes {name} takes no value (and, ora and eor do)")
+        raise Fail(f"-stripes {name} takes no value (and, ora, eor and line do)")
     else:
         n = 0
     b = colour(base.replace('$', '0x'), "the border's colour") if base else 0
@@ -1457,24 +1718,30 @@ def stripe_fx(spec):
         code, pa, pb, says = inc_d020 + [0xce, 0x20, 0xd0, 0x49, 0x00], 0, 3, 'inc $d020 : dec $d020'
     elif name == 'eor':
         code, pa, pb, says = lda_d020 + [0x49, n] + sta_d020, 0, 5, f'lda $d020 : eor #${n:02x} : sta $d020'
+    elif name == 'line':                        # (its value byte 1, the border's colour byte 6)
+        code, pa, pb = [0xa9, n] + sta_d020 + [0xa9, b] + sta_d020, 2, 7
+        says = f'lda #${n:02x} : sta $d020 : lda #${b:02x} : sta $d020'
     else:
         op = 0x29 if name == 'and' else 0x09
         code, pa, pb = [0xad, sr, 0x00, op, n] + sta_d020, 0, 5
         says = f'lda $0006 (the byte coming in) : {name} #${n:02x} : sta $d020'
-    assert len(code) == 8
+    if len(code) == 8:                          # (the 10-byte slot: then cmp #$00, 2 cycles)
+        code += [0xc9, 0x00]
+    assert len(code) == FX_LEN
     return dict(name=name, n=n, base=b, code=code, pa=pa, a=on_off(code[pa]), pb=pb, b=on_off(code[pb]),
-                says=says)
+                says=says, vat=1 if name == 'line' else 4 if name in FX_VALUE else 0,
+                cat=6 if name == 'line' else 0)
 
 
 def plain_fx(colour):
     """-stripes with one colour and -cycle: the effects core with no
-    lines at all (its 8 bytes jump past themselves: 3 cycles, less than
+    lines at all (its 10 bytes jump past themselves: 3 cycles, less than
     the core's stx $d020), the border colour, stepped by -cycle; its
     stores, never run, are the bytes after the jump"""
-    to = sym('core_fx')['stripe'] + 8
-    code = [0x4c, to & 255, to >> 8, 0x2c, 0x20, 0xd0, 0x2c, 0xea]
+    to = sym('core_fx')['stripe'] + FX_LEN
+    code = [0x4c, to & 255, to >> 8, 0x2c, 0x20, 0xd0, 0x2c, 0x20, 0xd0, 0xea]
     return dict(name='plain', n=0, base=colour, code=code, pa=3, a=(0x2c, 0x2c), pb=6, b=(0x2c, 0x2c),
-                says=f'no lines, colour {colour}')
+                says=f'no lines, colour {colour}', vat=0, cat=0)
 
 
 def stripe_table(spec):
@@ -1626,9 +1893,58 @@ def load_koala(path):
 PAL_FPS = 985248 / (63 * 312)
 
 
+def tune_share(mus, pic=False):
+    """what the loader may take of the CPU beside the tune's play calls
+    (%), in integers as SlopLoad 64 works it out (c64model.show_share):
+    play calls a frame (x 256, the most of PAL's and NTSC's) x the
+    longest call x 1.3, plus 900, out of an NTSC frame (less a picture's
+    bad lines)"""
+    calls256 = max(312 * 64 * 256 // mus['per_pal'], 263 * 64 * 256 // mus['per_ntsc'])
+    avail = 263 * 65 - (1000 if pic else 0)
+    need = mus['play_cycles'] * calls256 * 13 // 2560 + 900
+    return min(85, 100 * (avail - need) // avail if need < avail else 0), calls256
+
+
+def music_stage(mus, avoid, song):
+    """the music first (-musicstart before): SlopLoad's show module, the
+    tune alone with the screen off, placed clear of the loader, the tune
+    and avoid (the module's memory: its parts load while this plays), and
+    its header set for the tune; dict as find_game's, or None (no room).
+    The tool fills in its hand-over (+78 to +86) once the blocks are
+    known"""
+    import build as B
+    import contextlib
+    import io
+
+    def asm(base):
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            return B.assemble(os.path.join(ROOT, 'modules', 'show', 'show.asm'), 'module_show_stage',
+                              {'showbase': base})
+    org, data, labs = asm(0xca00)
+    mlen = labs['modend'] - org
+    banned = [(lo, hi) for lo, hi, _ in LOADER_RANGES] + list(avoid) + [(0xd000, 0xe000)]
+    for base in range(0xfe00 - mlen // 256 * 256, 0x07ff, -0x100):
+        if base + mlen <= 0xfffa and not any(overlap((base, base + mlen), b) for b in banned):
+            break
+    else:
+        return None
+    org, data, labs = asm(base)
+    d = bytearray(data)
+    share, _ = tune_share(mus)
+    d[13] = song
+    d[14] = share
+    d[15] = 0xff                                # (no picture)
+    d[16:25] = struct.pack('<HHHHB', mus['init'], mus['play'], mus['per_pal'], mus['per_ntsc'], mus['flags'])
+    d[28] = 0                                   # (no ending: it hands over)
+    return dict(addr=org, data=d, end=org + len(d), claim=labs['modend'], init=labs['init'],
+                frame=labs['frame'], stop=labs['stop'], claims=[(org, labs['modend'])], share=share,
+                hand=labs['hnseq'] - org)
+
+
 def place_show(mlen, music, pic, prog, sprites=0):
     """(vic bank, module address) for the show module and the picture
-    (and its sprites' bytes: at bank + $3f40): clear of the loader, the
+    (and its sprites' bytes: at bank + $3f40, and with them the screen's
+    page to its end, their pointers in it): clear of the loader, the
     music and each other, with the least of the program under them (that
     part loads after the show)"""
     banned = [(lo, hi) for lo, hi, _ in LOADER_RANGES] + list(music) + [(0xd000, 0xe000)]
@@ -1639,7 +1955,7 @@ def place_show(mlen, music, pic, prog, sprites=0):
     best = None
     for bank in ((3, 2, 1, 0) if pic else (3,)):
         b = bank * 0x4000
-        prs = [(b + 0x0c00, b + 0x0fe8), (b + 0x2000, b + 0x3f40)] if pic else []
+        prs = [(b + 0x0c00, b + (0x1000 if sprites else 0x0fe8)), (b + 0x2000, b + 0x3f40)] if pic else []
         if sprites:
             prs.append((b + 0x3f40, b + 0x3f40 + sprites))
         if not all(clear(r) for r in prs):
@@ -1695,6 +2011,8 @@ def write_sound(path, pulses, o):
             try:
                 A.encode_mp3(w, path, bitrate=o.get('bitrate') or MP3_BITRATE)
             except (RuntimeError, FileNotFoundError) as ex:
+                if os.path.isfile(path) and not os.path.getsize(path):
+                    os.remove(path)                 # (the encoder's empty file)
                 raise Fail(f"MP3 encoding needs GStreamer with lamemp3enc: {ex}")
     else:
         A.write_wav(path, samples, rate)
@@ -1898,12 +2216,7 @@ def analyse_cmd(path, o):
             res = other
     if not res['sections']:
         raise Fail(f"{path}: no calibration sections found (is it a dump of -calibrate's tape?)")
-    jit = o.get('jitter')
-    if not jit:
-        try:
-            jit = find_game(o['module'], o)['jitter']
-        except Fail:
-            jit = GAME_JITTER_DEFAULT
+    jit = o.get('jitter') or GAME_JITTER_DEFAULT    # (no module goes with -analyse: -jitter N, or the default)
     print(f"{path}: {len(res['sections'])} of {len(cal_sets(jit0))} pulse sets found")
     print("    h m  deck speed   wow    flutter  margin (raw / precomp)  misread pulses")
     for s in res['sections']:
@@ -1982,8 +2295,8 @@ def tapeside(out, inputs, o):
     # each program's tape, built and checked
     parts = []
     for f in files:
-        po = dict(o, module='none', show='none', music=None, start=None,
-                  filename=os.path.splitext(os.path.basename(f))[0])
+        po = dict(o, module='none', show='none', music=None, start=None,     # (the file's name: its
+                  filename=None)                                             # braces only characters)
         addr = load_prg(f)[0]
         if addr != 0x0801:
             raise Fail(f"{f}: loads at ${addr:04X}; programs on a tape side load at $0801 and"

@@ -108,7 +108,7 @@ def main(argv):
         return 1
     if opt['module'] == 'none':                 # (as -show none)
         opt['show'] = 'none'
-    shows = list(S.SHOWS) if opt['show'] == 'all' else [opt['show']]
+    shows = list(TAG) if opt['show'] == 'all' else [opt['show']]       # (every mode: a tape each)
     for show in shows:
         o_ = out if len(shows) == 1 else '-{}'.join(os.path.splitext(out)).format(show)
         try:

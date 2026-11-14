@@ -11,6 +11,13 @@
 ;   a block counter       three digits counting the program's disk
 ;                         blocks down to 000 as it loads (U.S. Gold's
 ;                         Novaload had one), in the screen's colours
+; And for a sound, Novaload's screech: voice 1 a sawtooth whose pitch is
+; each byte as it loads (Novaload stores each byte into $d401 too), here
+; from the loader's running xor of the block's bytes (ld_chk): its new
+; value against the last one seen is the byte (screech, called from the
+; waits for a line, many times a byte). It has the SID: a tune isn't
+; started, and one playing already (the music first's, a chain's) is cut
+; off; the tools start a tune with a second module instead.
 ;
 ; This source shows the demo screen (demo.pet, with the settings in
 ; mkdata.py). tools/petscii.py (and the PC tool's -module screen.pet) and
@@ -29,7 +36,8 @@
 ;                            counter's 0-9 follow it)
 ;                   the end  the message (screen codes), after the code
 ; and the header's claim (+10) and cpu share (+14: 35 with a scroller,
-; whose split needs more of each frame).
+; whose split needs more of each frame). The flags' bit 2: the screech
+; (no tune with it: one playing is cut off).
 ;
 ; The screen uses the C64's own character set, which the VIC sees in
 ; banks 0 and 2 only, so it is at $bc00 in bank 2; $01 is the
@@ -57,7 +65,7 @@
 ; The fade is the kit's (src/fadekit.asm, OZ GOLD's too).
 ;
 ; Memory: $bc00-$bfe7 and $e000 to modend (and the font's part, if
-; there is one: $b000 or $b800 on). Zero page $10-$2f. In a chain
+; there is one: $b000 or $b800 on). Zero page $10-$32. In a chain
 ; (slopload.py -then, petscii.py -chain) the main part is at $a000
 ; (petbase), clear of a picture module's $c000-$ffbf.
 ; ------------------------------------------------------------
@@ -79,6 +87,7 @@ g_border = 1                    ; it leaves the border to the loader (gk_bord)
 g_sfx = 0                       ; no sound effects: the music keeps all three voices
 g_wait = 1                      ; with -wait it holds at 000 until SPACE (then the fade)
 g_count = 0                     ; (no status line: its own counter, always)
+g_end = 0                       ; (no game to end: -waitgame isn't for it)
 gk_barhalf = 0                  ; (the kit's status line: not used)
 gk_srow = 24*40
 
@@ -109,6 +118,9 @@ l1 = $2c                        ; the line the scroll is set from
 l2 = $2d                        ; ... and put back from
 slotc = $2e                     ; 1: the music after the split
 shown = $2f                     ; the blocks on the counter ($ff: none yet)
+son = $30                       ; the screech: bit 7 on (sndinit), then off once loaded
+schk = $31                      ; ... the loader's ld_chk last seen
+scnt = $32                      ; ... and its ld_cnt (a byte stored: it moves)
 dbg_space = $8e                 ; debug: (no use here: the program starts by itself)
 dbg_auto = $8f
 
@@ -139,7 +151,20 @@ mainpart
 ; and the counter, the music
 ; ------------------------------------------------------------
 init    jsr gk_musinit          ; the header's music (the tool's choice)
-        lda #$0b
+        lda pflags              ; the screech: no tune (it has the SID)
+        and #4
+        beq @tn
+        lda #0
+        sta gk_kon              ; (none kept in time)
+        lda hsong
+        bmi @tn                 ; (none on the tape)
+        lda gk_opt              ; one playing already (the music first's, a
+        and #gk_chain           ; chain's): cut off
+        beq @tf
+        jsr mstop
+@tf     lda #$ff                ; (and musicgo starts none)
+        sta hsong
+@tn     lda #$0b
         sta $d011               ; (screen off: frame turns it on)
         ldx #$1f                ; zero page $10-$2f clear
         lda #0
@@ -152,11 +177,13 @@ init    jsr gk_musinit          ; the header's music (the tool's choice)
         lda pborder
         and #15
         jsr gk_bord
-        lda #2                  ; a tape error: red, or white on a red border
-        cmp $d020
+        ldx #2                  ; a tape error: red, or white on a red border
+        lda pborder             ; (not from $d020: the vic's colour registers
+        and #15                 ; read with their high bits set, never as 2)
+        cmp #2
         bne @e
-        lda #1
-@e      sta errcol
+        dex
+@e      stx errcol
         lda pbg
         sta $d021
         lda #6
@@ -183,6 +210,7 @@ init    jsr gk_musinit          ; the header's music (the tool's choice)
         sta $dae8,x
         inx
         bne @c
+        jsr gk_keep             ; (a tune playing on keeps time: gk_keep)
         lda #$ff
         sta shown
         lda pflags
@@ -200,7 +228,59 @@ init    jsr gk_musinit          ; the header's music (the tool's choice)
         sta cntp+1
         jsr count
 @nc     jsr sidinit
-        jmp musicgo
+        jsr musicgo
+        jsr sndinit             ; (no tune: the screech, if it's chosen)
+        jmp gk_kend             ; (a tune playing on: a play call just now)
+
+; sndinit  the screech (the flags' bit 2; init has seen to it that no
+; tune plays): voice 1 a sawtooth held at full sustain, the volume up, as
+; Novaload sets it; screech then gives it each loaded byte's pitch
+;   uses: a
+sndinit lda #0
+        sta son
+        lda pflags
+        and #4
+        beq @x
+        lda #$f0                ; frequency low $f0 (the high byte: the bytes)
+        sta $d400
+        sta $d406               ; sustain 15, release 0
+        lda #0
+        sta $d405               ; attack and decay 0
+        lda #$0f
+        sta $d418
+        lda #$21                ; sawtooth, the gate on
+        sta $d404
+        lda ld_cnt
+        sta scnt
+        lda ld_chk
+        sta schk
+        lda #$80
+        sta son
+@x      rts
+
+; screech  (from the waits) a byte stored since the last look (ld_cnt
+; moved): voice 1's pitch the byte, the block's running xor (ld_chk)
+; against the one seen last (two bytes since: the two xor-ed, as noisy).
+; Once the program is in, the gate off
+;   uses: a
+screech bit son
+        bpl @x
+        bit ld_state
+        bmi @off
+        lda ld_cnt
+        cmp scnt
+        beq @x
+        sta scnt
+        lda ld_chk
+        eor schk
+        sta $d401
+        eor schk
+        sta schk
+@x      rts
+@off    lda #$20                ; loaded: the gate off
+        sta $d404
+        lsr son                 ; (bit 7 off: no more)
+        rts
 
 ; scrinit  the scroller: its row's address and lines, the music's slot,
 ; the row emptied, the message from its start
@@ -363,12 +443,14 @@ frame   jsr vbwait
 ; line 251 on
 ;   uses: a
 vbwait
-@w0     lda $d012               ; the last vertical blank over (line 0-250):
+@w0     jsr screech             ; (the screech: a byte loaded since?)
+        lda $d012               ; the last vertical blank over (line 0-250):
         cmp #251                ; the low byte first, then bit 8 (read the
         bcs @w0                 ; other way round, line 255 then 256 looks
         bit $d011               ; like line 0)
         bmi @w0
-@w      bit $d011               ; then this one: line 251 on
+@w      jsr screech
+        bit $d011               ; then this one: line 251 on
         bmi @x
         lda $d012
         cmp #251
@@ -378,7 +460,8 @@ vbwait
 ; waitl  until line a (0-250) of the picture: its low byte (a to 250:
 ; 251-255 are the vertical blank), then bit 8
 waitl   sta tmp
-@w      lda $d012
+@w      jsr screech
+        lda $d012
         cmp tmp
         bcc @w
         cmp #251

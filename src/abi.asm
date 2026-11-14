@@ -53,7 +53,9 @@ tb_start = 11
 cia_tb_count = $59      ; crb: start, one-shot, force load, count ta
 cia_ta_run = $11        ; cra: start, continuous, force load
 cal_start = 16          ; pilot pulse that starts the stopwatch
-cal_end = 144           ; stage 1: the one 128 pulses later that reads it
+cal_end = 80            ; stage 1: the one 64 pulses later that reads it (128
+                        ; pulses, 512h, ran past 16 bits at h = 124 on an ntsc
+                        ; machine or a slow deck: the tape never loaded)
 cal_len = 64            ; core: reads it 64 pulses later, then measures
                         ; again (stopwatch latch $ff7f: rounds h)
 ; speed tracking moves h by a cycle after a net 32 votes (see core.asm)

@@ -55,6 +55,7 @@ g_border = 1                    ; it leaves the border to the loader (gk_bord)
 g_sfx = 1                       ; it makes effects on voice 3 (beside SlopLoad's player)
 g_wait = 1                      ; with -wait it plays on until SPACE or a game's end (the kit's)
 g_count = 1                     ; with -countdown its status line counts blocks (the kit's)
+g_end = 1                       ; with -waitgame it plays on until a game ends (gk_done)
 g_share = 35                    ; the most of the cpu (%) the loader may take
 gk_barhalf = 0                  ; the status bar: 9 characters, 1 px a step
 gk_srow = 24*40                 ; the status line: row 24
@@ -165,10 +166,82 @@ bnext = $65                     ; ... then: the title (0) or the serve (1)
 dbg_space = $8e                 ; debug: non-zero presses space once loaded
 dbg_auto = $8f                  ; debug: 1 plays until the program is in, 2 never loses
 
-*=$ce80                         ; the fade (every module's tune fades out at the
-lowpart                         ; end) and its scratch: a second part, past
-        incasm "fadekit.asm"    ; SlopLoad's player at $c000 (tools/build.py
-        incasm "fadescr.asm"    ; splits it off)
+*=$cda0                         ; the fade (every module's tune fades out at the
+lowpart                         ; end) and its scratch, and the sound effects: a
+        incasm "fadekit.asm"    ; second part, past SlopLoad's player at $c000
+        incasm "fadescr.asm"    ; (tools/build.py splits it off)
+
+; ------------------------------------------------------------
+; sound effects on voice 3 (only beside SlopLoad's own player or no
+; tune: any other tune has every voice). An effect: attack/decay,
+; sustain/release, then a frequency (high byte, + sfxtr) and control a
+; tick, 0 ends (the gate off)
+; ------------------------------------------------------------
+sfx     lda #0
+        sta sfxtr
+        lda mflags
+        cmp #2
+        beq @x
+        lda #0
+        sta $d412
+        lda sfxdat,x
+        sta $d413
+        lda sfxdat+1,x
+        sta $d414
+        inx
+        inx
+        stx sfxp
+@x      rts
+
+; wallsfx  a tick off the frame, unless another effect is playing
+wallsfx lda sfxp
+        bne @x
+        ldx #e_wall
+        jmp sfx
+@x      rts
+
+sfxtick ldx sfxp
+        beq @x
+        lda sfxdat,x
+        beq @end
+        clc
+        adc sfxtr
+        sta $d40f
+        lda sfxdat+1,x
+        sta $d412
+        sta sfxc
+        inx
+        inx
+        stx sfxp
+@x      rts
+@end    lda sfxc
+        and #$fe
+        sta $d412
+        lda #0
+        sta sfxp
+        rts
+
+sfxdat  byte 0                  ; (0: no effect)
+e_bat = *-sfxdat                ; the bat: a hollow knock
+        byte $00,$90,$12,$41,$12,$41,$0e,$41,0
+e_brick = *-sfxdat              ; a brick: a bright blip (pitched by its row)
+        byte $00,$a0,$24,$11,$24,$11,$30,$11,$30,$11,0
+e_tough = *-sfxdat              ; a tough brick cracking: a clank
+        byte $00,$a0,$70,$81,$40,$41,$40,$41,$38,$41,0
+e_wall = *-sfxdat               ; the frame: a tick
+        byte $00,$60,$50,$11,0
+e_serve = *-sfxdat              ; a serve: two notes up
+        byte $00,$a0,$1c,$11,$1c,$11,$1c,$11,$2a,$11,$2a,$11,$2a,$11,0
+e_lost = *-sfxdat               ; a ball lost: a slide down
+        byte $00,$f0,$30,$21,$2c,$21,$28,$21,$24,$21,$20,$21,$1c,$21,$18,$21
+        byte $15,$21,$12,$21,$10,$21,$0e,$21,$0c,$21,0
+e_clear = *-sfxdat              ; a wall down: up an arpeggio, twice
+        byte $00,$c0,$20,$41,$28,$41,$30,$41,$40,$41,$28,$41,$30,$41,$40,$41
+        byte $50,$41,$50,$41,$50,$41,0
+e_over = *-sfxdat               ; game over: down, slowly
+        byte $00,$f0,$20,$11,$20,$11,$20,$11,$20,$11,$1a,$11,$1a,$11,$1a,$11
+        byte $1a,$11,$15,$11,$15,$11,$15,$11,$15,$11,$15,$11,$15,$11,0
+
 lowend
 
 *=$e000
@@ -217,7 +290,9 @@ init    jsr gk_musinit          ; first: the header is characters 0-3
         sta smode               ; (the status line: drawn at the first frame)
         lda #nballs
         sta balls
-        jsr drawall             ; the frame, an empty field, the score line
+        jsr gk_keep             ; (a tune playing on keeps time while this
+        jsr drawall             ; draws: at least once a frame, gk_keep)
+        jsr gk_keep
         lda #7                  ; the title, in the field
         sta tcol
         ldx #<tx_title
@@ -240,6 +315,7 @@ init    jsr gk_musinit          ; first: the header is characters 0-3
         ldy #>tx_t3
         lda #19
         jsr puttext
+        jsr gk_keep
         jsr loadlevel           ; the first wall, built over the title's first
         lda #st_build           ; ticks (rows 2-12: the texts stay)
         sta st
@@ -249,10 +325,13 @@ init    jsr gk_musinit          ; first: the header is characters 0-3
         sta bend
         lda #batmid
         sta batx
+        jsr gk_keep
         jsr render              ; the bat, shown at once
         jsr swap
+        jsr gk_keep
         jsr sidinit
-        jmp musicgo
+        jsr musicgo
+        jmp gk_kend             ; (a tune playing on: a play call just now)
 
 ; ------------------------------------------------------------
 ; stop  silence; the core blanks the screen after
@@ -1460,7 +1539,13 @@ drawall ldx #0
         sta $da00,x
         sta $dae8,x
         inx
+        txa                     ; (a tune playing on keeps time: a call
+        and #$3f                ; every 64, gk_keep)
+        bne @k
+        jsr gk_keep
+@k      txa
         bne @f
+        jsr gk_keep
         lda #1                  ; rows 0 and 24: hi-res, white
         ldx #39
 @w      sta $d800,x
@@ -1882,77 +1967,6 @@ autopilot
         rts
 @no     lda #$10
         rts
-
-; ------------------------------------------------------------
-; sound effects on voice 3 (only beside SlopLoad's own player or no
-; tune: any other tune has every voice). An effect: attack/decay,
-; sustain/release, then a frequency (high byte, + sfxtr) and control a
-; tick, 0 ends (the gate off)
-; ------------------------------------------------------------
-sfx     lda #0
-        sta sfxtr
-        lda mflags
-        cmp #2
-        beq @x
-        lda #0
-        sta $d412
-        lda sfxdat,x
-        sta $d413
-        lda sfxdat+1,x
-        sta $d414
-        inx
-        inx
-        stx sfxp
-@x      rts
-
-; wallsfx  a tick off the frame, unless another effect is playing
-wallsfx lda sfxp
-        bne @x
-        ldx #e_wall
-        jmp sfx
-@x      rts
-
-sfxtick ldx sfxp
-        beq @x
-        lda sfxdat,x
-        beq @end
-        clc
-        adc sfxtr
-        sta $d40f
-        lda sfxdat+1,x
-        sta $d412
-        sta sfxc
-        inx
-        inx
-        stx sfxp
-@x      rts
-@end    lda sfxc
-        and #$fe
-        sta $d412
-        lda #0
-        sta sfxp
-        rts
-
-sfxdat  byte 0                  ; (0: no effect)
-e_bat = *-sfxdat                ; the bat: a hollow knock
-        byte $00,$90,$12,$41,$12,$41,$0e,$41,0
-e_brick = *-sfxdat              ; a brick: a bright blip (pitched by its row)
-        byte $00,$a0,$24,$11,$24,$11,$30,$11,$30,$11,0
-e_tough = *-sfxdat              ; a tough brick cracking: a clank
-        byte $00,$a0,$70,$81,$40,$41,$40,$41,$38,$41,0
-e_wall = *-sfxdat               ; the frame: a tick
-        byte $00,$60,$50,$11,0
-e_serve = *-sfxdat              ; a serve: two notes up
-        byte $00,$a0,$1c,$11,$1c,$11,$1c,$11,$2a,$11,$2a,$11,$2a,$11,0
-e_lost = *-sfxdat               ; a ball lost: a slide down
-        byte $00,$f0,$30,$21,$2c,$21,$28,$21,$24,$21,$20,$21,$1c,$21,$18,$21
-        byte $15,$21,$12,$21,$10,$21,$0e,$21,$0c,$21,0
-e_clear = *-sfxdat              ; a wall down: up an arpeggio, twice
-        byte $00,$c0,$20,$41,$28,$41,$30,$41,$40,$41,$28,$41,$30,$41,$40,$41
-        byte $50,$41,$50,$41,$50,$41,0
-e_over = *-sfxdat               ; game over: down, slowly
-        byte $00,$f0,$20,$11,$20,$11,$20,$11,$20,$11,$1a,$11,$1a,$11,$1a,$11
-        byte $1a,$11,$15,$11,$15,$11,$15,$11,$15,$11,$15,$11,$15,$11,0
 
 ; ------------------------------------------------------------
 ; tables

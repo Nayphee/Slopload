@@ -6,7 +6,13 @@
 ;               at bank+$2000, screen at bank+$0c00 in the VIC bank
 ;               the tool chose (byte 25); a Koala picture's colours
 ;               loaded straight into colour ram, a hires one (Art
-;               Studio, Doodle: +28 bit 2) has none
+;               Studio, Doodle: +28 bit 2) has none. It loads whole and
+;               then shows; or, as an option (+27 bit 6, its maker's:
+;               -drawin, PICTURE-LM's line 9), it draws in as the first
+;               module (+28 bit 6, the tools'): this starts first, the
+;               bitmap cleared (a hires picture's screen too), and the
+;               colours, the screen and the bitmap load while it shows,
+;               so the picture appears as its bytes come
 ;   music       the built-in player or a SID tune (-sid), called
 ;               every so many raster lines (bytes 20-23: 1/64 lines,
 ;               PAL and NTSC), so 50 Hz, 60 Hz and faster tunes keep
@@ -54,11 +60,17 @@ hmflags byte 1                  ; +24 1 the built-in player, 2 a sid tune
 hbank   byte 0                  ; +25 the picture's vic bank, as $dd00's low bits (0 = bank 3)
         byte 0                  ; +26 (a module's block count: none here)
         byte $11                ; +27 bit 0: it leaves the border to the loader (-showstripes);
-                                ; bit 4: second in a chain, it plays on the tune the first started
+                                ; bit 4: second in a chain, it plays on the tune the first started;
+                                ; bit 6: its picture draws in (its maker's option: the tools
+                                ; then load it after it starts, +28 bit 6)
 hopt    byte 0                  ; +28 the tool's: bit 0 -fade, bit 1 -wait, bit 2 a hires picture,
-                                ; bit 4 a chain's tune already playing (no sidclr, no init)
+                                ; bit 4 a chain's tune already playing (no sidclr, no init),
+                                ; bit 6 the picture draws in: its screen (bank+$0c00-$0fe7)
+                                ; and bitmap (bank+$2000-$3f3f) load after init (cleared there)
 ; the loading sprites (-sprite: the tool's), their data at the picture's
-; bank + $3f40 and + $3f80 (pointers $fd, $fe)
+; bank + $3f40 and + $3f80 (pointers $fd, $fe). The tools make the
+; screen's part 1,024 bytes then (to bank+$0fff, the pointers in it), so
+; a program's bytes there load after the show and not over them
 hspren  byte 0                  ; +29 $d015: 0 none, 1 or 3
 hsprxy  byte 0,0,0,0            ; +30 sprite 0's x (low 8 bits), y; +32 sprite 1's
 hsprmsb byte 0                  ; +34 $d010
@@ -76,14 +88,27 @@ hcolsrc word 0                  ; +76 a Koala picture's colours in the module's 
                                 ; (a .lm's: PICTURE-LM, tools/picturelm.py; a part can't
                                 ; load into colour ram), copied there at the start; 0:
                                 ; none (a picture module loads them there)
+; the music first (the tools', the default with a tune and a module): this
+; plays the tune, the screen off, while the module's parts load, then hands
+; over to it (hand)
+hnseq   byte 0                  ; +78 the blocks in (ld_seq) when they are; 0: never
+hninit  word 0                  ; +79 the module's init
+hnframe word 0                  ; +81 its frame (or a chain's switch): the core's from then on
+hnstop  word 0                  ; +83 its stop (or the switch's)
+hnstep  word 0                  ; +85 the progress a page from then on (8.8: pt_step)
 ; (it leaves the border to the loader while ld_state bit 5 is set:
 ; -showstripes; the tool knows it does)
 
 mflags = hmflags                ; (fadekit.asm's names)
+pt_frame = $0407                ; the core's patch area (src/core.asm; tools/build.py
+pt_stop = $0409                 ; checks them)
+pt_step = $040b
 
 ; ------------------------------------------------------------
 ; init  the picture on (if any), the music started (if any)
-;   in:   screen off, the picture's data and the music loaded
+;   in:   screen off, the music loaded, and the picture's data (or, to
+;         draw it in, +28 bit 6: its colours and sprites; the screen
+;         and bitmap come after, so they are cleared first)
 ; ------------------------------------------------------------
 init    lda #$20                ; the border black, unless the loader's
         bit ld_state            ; (-showstripes)
@@ -146,16 +171,24 @@ init    lda #$20                ; the border black, unless the loader's
 @mc     stx $d016
         lda hpic
         sta $d021
-        jsr colcopy
+        lda hopt                ; drawn in: what it loads into cleared first
+        and #$40
+        beq @cc
+        jsr pclear
+@cc     jsr colcopy
         jsr sprinit
 @vb     bit $d011               ; on in the vertical blank
         bpl @vb
         lda #$3b                ; bitmap, screen on
         sta $d011
-@music  lda hsong
-        bmi @x
-        lda hopt                ; a chain's: the tune playing already, started
+@music  lda hopt                ; a chain's: the tune playing already, started
         and #$10                ; by the module before: it plays on
+        ldx hsong
+        bpl @song
+        tax                     ; no tune of its own, and none playing on: the
+        bne @x                  ; sid quiet (the module before it in a chain
+        jmp sidclr              ; may have left a voice on: a screech)
+@song   tax
         bne @on
         jsr sidclr
         lda #$0f
@@ -199,7 +232,13 @@ tick    bit ld_state
 ;   out:  carry set once the program may start: it is in, and the
 ;         ending (+28) is done
 ; ------------------------------------------------------------
-frame   lda musicon
+frame   lda hnseq               ; the music first: the module's parts in?
+        beq @own
+        lda ld_seq
+        cmp hnseq
+        bcc @own
+        jmp hand
+@own    lda musicon
         bne @mus
         jsr nextfr
         jmp @bord
@@ -210,10 +249,17 @@ frame   lda musicon
         bne @wf
 @line   jsr rline               ; then the line
         jsr sprchk
-        cpx th
-        bcc @line
-        bne @go
-        cmp tl
+        cpx prevh               ; (lower than the last look: a new frame, the
+        bcc @go                 ; target in the one before: late, play now.
+        bne @tg                 ; prevl/h keep that last look, so nextfr counts
+        cmp prevl               ; this frame's start for the next call)
+        bcc @go
+@tg     sta prevl               ; each look kept: a pass is longer than a line,
+        stx prevh               ; so a target on the frame's last line is easily
+        cpx th                  ; passed unseen (and a 262-line VIC has no line
+        bcc @line               ; 262 at all: the wait never ended). A long call
+        bne @go                 ; (the loader's interrupts too) can run into the
+        cmp tl                  ; next frame, which nextfr then counts
         bcc @line
 @go     jsr tick
         clc                     ; the next call: per lines on
@@ -240,9 +286,6 @@ frame   lda musicon
         inc wraps
         bne @wr
 @nw     jsr settl
-        jsr rline
-        sta prevl
-        stx prevh
 @bord   lda #$20                ; (the border the loader's: -showstripes)
         bit ld_state
         bne ending
@@ -306,6 +349,257 @@ ending  bit ld_state
         rts
 @go     sec
         rts
+
+; ------------------------------------------------------------
+; hand  the music first: the module's parts are in (ld_seq has reached
+; +78). The core calls its frame from now on (+81: the module's, or a
+; chain's switch), its stop (+83) and counts its progress (+85); then
+; its init, then its frame, at once after a play call: the VIC as the
+; core leaves a module's init (the screen off, no sprites: the tune
+; alone touches only the border). This one's
+; stop is never called: the tune plays on in the module (its +28 bit 4,
+; the tool's), which doesn't start it again
+; ------------------------------------------------------------
+hand    ldx #5                  ; (+81 to +86, as the core's pt_frame,
+@c      lda hnframe,x           ; pt_stop, pt_step: side by side in both)
+        sta pt_frame,x
+        dex
+        bpl @c
+        lda #0
+        sta ld_progress
+        jsr @in
+        jmp (hnframe)
+@in     jmp (hninit)
+
+; nextfr  wait for the raster to start a new frame (lower than the
+; line it was last seen on)
+nextfr  jsr rline
+        jsr sprchk
+        cpx prevh
+        bcc @new
+        bne @up
+        cmp prevl
+        bcc @new
+@up     sta prevl
+        stx prevh
+        jmp nextfr
+@new    sta prevl
+        stx prevh
+        rts
+
+; rline  the raster line: a = low byte, x = bit 8
+rline   lda $d012
+        sta rl
+        lda $d011
+        asl a
+        lda #0
+        rol a
+        tax
+        lda $d012
+        cmp rl
+        bne rline
+        rts
+
+; settl  the target's line (target / 64) into tl, th
+settl   lda target
+        sta tl
+        lda target+1
+        sta th
+        ldx #6
+@s      lsr th
+        ror tl
+        dex
+        bne @s
+        rts
+
+ramp    byte 0,0,11,11,12,12,15,15
+
+; sprchk  from the waits, the raster in a (low byte) and x (bit 8): a
+; new frame counts, every hfspd frames the flash's next colour, written
+; while the beam is outside the sprites' lines
+;   uses: y (a, x kept)
+sprchk  ldy hspren
+        beq @x
+        ldy hflen               ; (one colour: nothing to flash; a store
+        cpy #2                  ; to a colour register each frame would
+        bcc @x                  ; make the 8565's grey dots)
+        sta sprl
+        cpx sprh                ; a new frame: the line lower than before
+        bcc @new
+        bne @old
+        cmp sprlo
+        bcs @old
+@new    ldy fcnt
+        iny
+        cpy hfspd
+        bcc @c
+        ldy fidx                ; the next colour
+        iny
+        cpy hflen
+        bcc @i
+        ldy #0
+@i      sty fidx
+        inc fpend
+        ldy #0
+@c      sty fcnt
+@old    stx sprh
+        lda sprl
+        sta sprlo
+        ldy fpend
+        beq @r
+        cpx #1                  ; (lines 256 on: the border)
+        beq @w
+        cmp hsprlo
+        bcc @w
+        cmp hsprhi
+        bcc @r
+        beq @r
+@w      ldy fidx
+        lda hflash,y
+        sta $d027
+        sta $d028
+        lda #0
+        sta fpend
+@r      lda sprl
+@x      rts
+
+; ------------------------------------------------------------
+; stop  the music off (the loader turns the screen off)
+; ------------------------------------------------------------
+stop    lda musicon
+        beq @x
+        lda hmflags
+        lsr a
+        bcc @sid
+        jsr builtin_stop
+        jmp @x
+@sid    jsr sidclr
+@x      lda #0
+        sta $d418
+        rts
+
+sidclr  ldx #$18                ; every sid register to 0
+        lda #0
+@c      sta $d400,x
+        dex
+        bpl @c
+        rts
+
+        incasm "fadekit.asm"
+
+; ---- variables (no zero page) ----
+musicon byte 0
+exitreq byte 0                  ; the fade's end
+tmp     byte 0
+flen    word 0                  ; a frame, 1/64 lines
+per     word 0                  ; between play calls, 1/64 lines
+target  word 0                  ; the next call, 1/64 lines into its frame
+wraps   byte 0                  ; frames to wait for before it
+tl      byte 0                  ; its line
+th      byte 0
+prevl   byte 0                  ; the line last seen
+prevh   byte 0
+rl      byte 0
+lastbd  byte $ff                ; the border colour last stored ($ff: none yet)
+drawn   byte 0                  ; the prompt drawn
+keyed   byte 0                  ; space or fire pressed
+kup     byte 0                  ; ... let go of since the prompt
+kdbg    byte 0                  ; (tests: not 0 is a press)
+pbase   byte 0                  ; the picture's bank (high byte)
+pport   byte 0                  ; $01 as it was
+pk      byte 0                  ; the letter being drawn
+pbase0  byte 0                  ; the picture's bank (high byte), from init
+fcnt    byte 0                  ; the flash: frames into this step
+fidx    byte 0                  ; ... its colour now
+fpend   byte 0                  ; ... not yet written
+sprl    byte 0                  ; the line last seen (low byte, bit 8)
+sprh    byte 0
+sprlo   byte 0
+
+; ---- a picture's own code, last: its colours, sprites, the -wait
+; prompt and its drawing in, which SlopLoad 64's copy of this module
+; (music only, or the music first's player: never a picture of its own)
+; leaves off (c64model.show_module: up to drawcode). Only init's picture
+; branch and ending's -wait call into it ----
+drawcode
+; colcopy  hcolsrc's 1,000 colours (if any) into colour ram, a quarter at a time
+;   uses: a, x
+colcopy lda hcolsrc+1
+        beq @x
+        ldx #0                  ; the four quarters' sources: + 0, 250, 500, 750
+@q      lda hcolsrc
+        clc
+        adc qoff,x
+        sta @s0+1,x             ; (each lda's operand: 6 bytes apart)
+        lda hcolsrc+1
+        adc qoffh,x
+        sta @s0+2,x
+        txa
+        clc
+        adc #6
+        tax
+        cpx #24
+        bcc @q
+        ldx #0
+@s0     lda $ffff,x
+        sta $d800,x
+        lda $ffff,x
+        sta $d800+250,x
+        lda $ffff,x
+        sta $d800+500,x
+        lda $ffff,x
+        sta $d800+750,x
+        inx
+        cpx #250
+        bne @s0
+@x      rts
+qoff    byte 0,0,0,0,0,0,250,0,0,0,0,0,<500,0,0,0,0,0,<750         ; (by 6: an lda and a sta)
+qoffh   byte 0,0,0,0,0,0,0,0,0,0,0,0,>500,0,0,0,0,0,>750
+
+; ------------------------------------------------------------
+; sprinit  the loading sprites (+29 on): where, how, their first colour
+;   uses: a, x, y
+; ------------------------------------------------------------
+sprinit lda hspren
+        beq @x
+        ldx #3
+@xy     lda hsprxy,x            ; x0, y0, x1, y1
+        sta $d000,x
+        dex
+        bpl @xy
+        lda hsprmsb
+        sta $d010
+        lda hsprmc
+        sta $d01c
+        lda hsprxx
+        sta $d01d
+        lda hspryx
+        sta $d017
+        lda hspr25
+        sta $d025
+        lda hspr25+1
+        sta $d026
+        lda #0
+        sta $d01b               ; (in front of the picture)
+        sta fcnt
+        sta fidx
+        sta fpend
+        lda hflash
+        sta $d027
+        sta $d028
+        lda pbase0              ; their pointers: screen + $3f8 (a file
+                                ; made before its screen part had them)
+        clc
+        adc #>$0ff8
+        sta @p1+2
+        sta @p2+2
+        lda #$fd
+@p1     sta $fff8
+        lda #$fe
+@p2     sta $fff9
+        lda hspren
+        sta $d015
+@x      rts
 
 ; kheld  space, or fire on joystick port 2 (port 1's fire reads as space)
 ;   out:  c set if held
@@ -457,228 +751,45 @@ twice   byte $00,$03,$0c,$0f,$30,$33,$3c,$3f,$c0,$c3,$cc,$cf,$f0,$f3,$fc,$ff
 ptext   byte 16,18,5,19,19,32,19,16,1,3,5,32,15,18,32,6,9,18,5   ; PRESS SPACE OR FIRE
 ptextend
 
-; nextfr  wait for the raster to start a new frame (lower than the
-; line it was last seen on)
-nextfr  jsr rline
-        jsr sprchk
-        cpx prevh
-        bcc @new
-        bne @up
-        cmp prevl
-        bcc @new
-@up     sta prevl
-        stx prevh
-        jmp nextfr
-@new    sta prevl
-        stx prevh
-        rts
-
-; rline  the raster line: a = low byte, x = bit 8
-rline   lda $d012
-        sta rl
-        lda $d011
-        asl a
-        lda #0
-        rol a
-        tax
-        lda $d012
-        cmp rl
-        bne rline
-        rts
-
-; settl  the target's line (target / 64) into tl, th
-settl   lda target
-        sta tl
-        lda target+1
-        sta th
-        ldx #6
-@s      lsr th
-        ror tl
-        dex
-        bne @s
-        rts
-
-ramp    byte 0,0,11,11,12,12,15,15
-
-; colcopy  hcolsrc's 1,000 colours (if any) into colour ram, a quarter at a time
-;   uses: a, x
-colcopy lda hcolsrc+1
-        beq @x
-        ldx #0                  ; the four quarters' sources: + 0, 250, 500, 750
-@q      lda hcolsrc
-        clc
-        adc qoff,x
-        sta @s0+1,x             ; (each lda's operand: 6 bytes apart)
-        lda hcolsrc+1
-        adc qoffh,x
-        sta @s0+2,x
-        txa
-        clc
-        adc #6
-        tax
-        cpx #24
-        bcc @q
-        ldx #0
-@s0     lda $ffff,x
-        sta $d800,x
-        lda $ffff,x
-        sta $d800+250,x
-        lda $ffff,x
-        sta $d800+500,x
-        lda $ffff,x
-        sta $d800+750,x
-        inx
-        cpx #250
-        bne @s0
-@x      rts
-qoff    byte 0,0,0,0,0,0,250,0,0,0,0,0,<500,0,0,0,0,0,<750         ; (by 6: an lda and a sta)
-qoffh   byte 0,0,0,0,0,0,0,0,0,0,0,0,>500,0,0,0,0,0,>750
-
-; ------------------------------------------------------------
-; sprinit  the loading sprites (+29 on): where, how, their first colour
-;   uses: a, x, y
-; ------------------------------------------------------------
-sprinit lda hspren
-        beq @x
+; pclear  (a picture drawn in) its bitmap set to 0, and a hires one's
+; screen too (its 0 bits take their colour from it): only the
+; background then, until their bytes load. Not the sprite pointers
+; (screen + $3f8: sprinit's)
+pclear  lda hopt
+        and #4
+        beq @bm
+        lda pbase0              ; hires: the screen, $0c00-$0fe7
+        ora #$0c
         ldx #3
-@xy     lda hsprxy,x            ; x0, y0, x1, y1
-        sta $d000,x
-        dex
-        bpl @xy
-        lda hsprmsb
-        sta $d010
-        lda hsprmc
-        sta $d01c
-        lda hsprxx
-        sta $d01d
-        lda hspryx
-        sta $d017
-        lda hspr25
-        sta $d025
-        lda hspr25+1
-        sta $d026
-        lda #0
-        sta $d01b               ; (in front of the picture)
-        sta fcnt
-        sta fidx
-        sta fpend
-        lda hflash
-        sta $d027
-        sta $d028
-        lda pbase0              ; their pointers: screen + $3f8
-        clc
-        adc #>$0ff8
-        sta @p1+2
-        sta @p2+2
-        lda #$fd
-@p1     sta $fff8
-        lda #$fe
-@p2     sta $fff9
-        lda hspren
-        sta $d015
-@x      rts
+        ldy #232
+        jsr pzero
+@bm     lda pbase0              ; the bitmap, $2000-$3f3f
+        ora #$20
+        ldx #31
+        ldy #64
 
-; sprchk  from the waits, the raster in a (low byte) and x (bit 8): a
-; new frame counts, every hfspd frames the flash's next colour, written
-; while the beam is outside the sprites' lines
-;   uses: y (a, x kept)
-sprchk  ldy hspren
-        beq @x
-        ldy hflen               ; (one colour: nothing to flash; a store
-        cpy #2                  ; to a colour register each frame would
-        bcc @x                  ; make the 8565's grey dots)
-        sta sprl
-        cpx sprh                ; a new frame: the line lower than before
-        bcc @new
-        bne @old
-        cmp sprlo
-        bcs @old
-@new    ldy fcnt
-        iny
-        cpy hfspd
-        bcc @c
-        ldy fidx                ; the next colour
-        iny
-        cpy hflen
-        bcc @i
-        ldy #0
-@i      sty fidx
-        inc fpend
-        ldy #0
-@c      sty fcnt
-@old    stx sprh
-        lda sprl
-        sta sprlo
-        ldy fpend
+; pzero  x pages from page a, then y bytes more, set to 0
+pzero   sta @p+2
+        sta @z+2
+        sty @n+1
+        lda #0
+        tay
+        cpx #0
         beq @r
-        cpx #1                  ; (lines 256 on: the border)
-        beq @w
-        cmp hsprlo
-        bcc @w
-        cmp hsprhi
-        bcc @r
-        beq @r
-@w      ldy fidx
-        lda hflash,y
-        sta $d027
-        sta $d028
-        lda #0
-        sta fpend
-@r      lda sprl
-@x      rts
-
-; ------------------------------------------------------------
-; stop  the music off (the loader turns the screen off)
-; ------------------------------------------------------------
-stop    lda musicon
-        beq @x
-        lda hmflags
-        lsr a
-        bcc @sid
-        jsr builtin_stop
-        jmp @x
-@sid    jsr sidclr
-@x      lda #0
-        sta $d418
-        rts
-
-sidclr  ldx #$18                ; every sid register to 0
-        lda #0
-@c      sta $d400,x
+@p      sta $ff00,y
+        iny
+        bne @p
+        inc @p+2
+        inc @z+2
         dex
-        bpl @c
-        rts
-
-        incasm "fadekit.asm"
-
-; ---- variables (no zero page) ----
-musicon byte 0
-exitreq byte 0                  ; the fade's end
-tmp     byte 0
-flen    word 0                  ; a frame, 1/64 lines
-per     word 0                  ; between play calls, 1/64 lines
-target  word 0                  ; the next call, 1/64 lines into its frame
-wraps   byte 0                  ; frames to wait for before it
-tl      byte 0                  ; its line
-th      byte 0
-prevl   byte 0                  ; the line last seen
-prevh   byte 0
-rl      byte 0
-lastbd  byte $ff                ; the border colour last stored ($ff: none yet)
-drawn   byte 0                  ; the prompt drawn
-keyed   byte 0                  ; space or fire pressed
-kup     byte 0                  ; ... let go of since the prompt
-kdbg    byte 0                  ; (tests: not 0 is a press)
-pbase   byte 0                  ; the picture's bank (high byte)
-pport   byte 0                  ; $01 as it was
-pk      byte 0                  ; the letter being drawn
-pbase0  byte 0                  ; the picture's bank (high byte), from init
-fcnt    byte 0                  ; the flash: frames into this step
-fidx    byte 0                  ; ... its colour now
-fpend   byte 0                  ; ... not yet written
-sprl    byte 0                  ; the line last seen (low byte, bit 8)
-sprh    byte 0
-sprlo   byte 0
+        bne @p
+@r      ldy #0
+@n      cpy #0                  ; (patched: the bytes past the pages)
+        beq @x
+@z      sta $ff00,y
+        iny
+        bne @n
+@x      rts
 codeend
 ; the fade's scratch (fadekit.asm), past the bytes on the tape
 fsh = codeend                   ; (25) the tune's SID registers

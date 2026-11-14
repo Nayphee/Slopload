@@ -182,19 +182,20 @@ class Sim:
         elif mn == 'brk': raise StopIteration('brk')
         # ---- illegal opcodes (stable subset)
         elif mn == 'lax': self.a = self.x = self.setnz(g())
-        elif mn == 'sax': m[a] = self.a & self.x
+        elif mn == 'sax': m[a] = self.a & self.x; self._wh(a, m[a])     # (each store told: sidstrip's lists)
         elif mn == 'sbx':
             r = (self.a & self.x) - g(); self.c = int(r >= 0); self.x = self.setnz(r)
-        elif mn == 'dcp': m[a] = (m[a] - 1) & 0xff; self.cmp_(self.a, m[a])
-        elif mn == 'isc': m[a] = (m[a] + 1) & 0xff; self.sbc(m[a])
+        elif mn == 'dcp': m[a] = (m[a] - 1) & 0xff; self._wh(a, m[a]); self.cmp_(self.a, m[a])
+        elif mn == 'isc': m[a] = (m[a] + 1) & 0xff; self._wh(a, m[a]); self.sbc(m[a])
         elif mn == 'slo':
-            v = m[a]; self.c = v >> 7; m[a] = (v << 1) & 0xff; self.a = self.setnz(self.a | m[a])
+            v = m[a]; self.c = v >> 7; m[a] = (v << 1) & 0xff; self._wh(a, m[a]); self.a = self.setnz(self.a | m[a])
         elif mn == 'rla':
-            v = m[a]; c = v >> 7; m[a] = ((v << 1) | self.c) & 0xff; self.c = c; self.a = self.setnz(self.a & m[a])
+            v = m[a]; c = v >> 7; m[a] = ((v << 1) | self.c) & 0xff; self._wh(a, m[a]); self.c = c
+            self.a = self.setnz(self.a & m[a])
         elif mn == 'sre':
-            v = m[a]; self.c = v & 1; m[a] = v >> 1; self.a = self.setnz(self.a ^ m[a])
+            v = m[a]; self.c = v & 1; m[a] = v >> 1; self._wh(a, m[a]); self.a = self.setnz(self.a ^ m[a])
         elif mn == 'rra':
-            v = m[a]; c = v & 1; m[a] = (v >> 1) | (self.c << 7); self.c = c; self.adc(m[a])
+            v = m[a]; c = v & 1; m[a] = (v >> 1) | (self.c << 7); self._wh(a, m[a]); self.c = c; self.adc(m[a])
         elif mn == 'anc': self.a = self.setnz(self.a & g()); self.c = self.n
         elif mn == 'alr':
             v = self.a & g(); self.c = v & 1; self.a = self.setnz(v >> 1)

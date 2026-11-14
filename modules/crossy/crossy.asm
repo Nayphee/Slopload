@@ -45,6 +45,7 @@ g_border = 1                    ; it leaves the border to the loader (gk_bord)
 g_sfx = 1                       ; it makes effects on voice 3 (beside SlopLoad's player)
 g_wait = 1                      ; with -wait it plays on until SPACE or a game's end (the kit's)
 g_count = 1                     ; with -countdown its status line counts blocks (the kit's)
+g_end = 1                       ; with -waitgame it plays on until a game ends (gk_done)
 g_share = 35                    ; the most of the cpu (%) the loader may take
 gk_barhalf = 1                  ; the status bar: 5 characters, 2 px a step
 gk_srow = 2*40                  ; the status line: row 2
@@ -170,7 +171,7 @@ ej0 = $6c                       ; ... and its lane
 dbg_space = $8e                 ; debug: non-zero presses space once loaded
 dbg_auto = $8f                  ; debug: non-zero plays by itself
 
-*=$c94f                         ; (past $c000-$c94e: SlopLoad's player there, the effects beside it;
+*=$c8e0                         ; (past $c000-$c92a: SlopLoad's player there, the effects beside it;
                                 ; the low part ends at $cfe8 as before, the fade in it too)
 lowpart                         ; (a second part: tools/build.py splits it off)
         incasm "low.asm"
@@ -478,10 +479,13 @@ t_over  jsr gk_done
 @x      rts
 
 ; ---- a new world being drawn in the hidden buffer ----
-t_build lda lgen                ; its lanes, three a tick
+t_build lda lgen                ; its lanes, three a tick: 16 in all (the last
+        cmp #16                 ; tick one: two more went into the ring's
+        bcs @b                  ; first slots, over the hen's start lanes,
+        jsr genlane             ; a road or a river under her on the title)
+        lda lgen
         cmp #16
-        bcs @b
-        jsr genlane
+        bcs @x
         jsr genlane
         jmp genlane
 @b      lda cprow

@@ -15,7 +15,8 @@ inidone ldx #0
         sta scra+744,x          ; (to 999)
         inx
         bne @c
-        jmp titlego
+        jsr titlego
+        jmp gk_kend             ; (a tune playing on: a play call just now)
 
 ; ------------------------------------------------------------
 ; stop  silence; the core blanks the screen after

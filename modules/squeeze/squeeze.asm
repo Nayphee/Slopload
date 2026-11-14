@@ -47,6 +47,7 @@ g_border = 1                    ; it leaves the border to the loader (gk_bord)
 g_sfx = 1                       ; it makes effects on voice 3 (beside SlopLoad's player)
 g_wait = 1                      ; with -wait it plays on until SPACE or a game's end (the kit's)
 g_count = 1                     ; with -countdown its status line counts blocks (the kit's)
+g_end = 1                       ; with -waitgame it plays on until a game ends (gk_done)
 g_share = 35                    ; the most of the cpu (%) the loader may take
 gk_barhalf = 0                  ; the status bar: 9 characters, 1 px a step
 gk_srow = 24*40                 ; the status line: row 24
@@ -194,7 +195,9 @@ init    jsr gk_musinit          ; first: the header is characters 0-3
         jsr vbwork              ; (the sprite where it goes, before it shows)
         lda #1
         sta $d015
-        jsr drawall
+        jsr gk_keep             ; (a tune playing on keeps time while this
+        jsr drawall             ; draws: at least once a frame, gk_keep)
+        jsr gk_keep
         jsr drawhud
         jsr sidinit
         jsr musicgo
@@ -225,7 +228,8 @@ init    jsr gk_musinit          ; first: the header is characters 0-3
         ldx #<tx_t4
         ldy #>tx_t4
         lda #17
-        jmp ctext
+        jsr ctext
+        jmp gk_kend             ; (a tune playing on: a play call just now)
 
 ; ------------------------------------------------------------
 ; stop  silence; the core blanks the screen (and the sprite) after
@@ -1151,6 +1155,7 @@ drawall ldx #0                  ; rows 0-1 and 24: blank, white
 @put    sta (pt),y
         dey
         bpl @col
+        jsr gk_keep             ; (init's: a tune playing on keeps time)
         inc tmp3
         lda tmp3
         cmp #fl+2

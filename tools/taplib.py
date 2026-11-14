@@ -149,7 +149,7 @@ def rom_decode(pulses):
 # one class 3 sync, bytes. See src/core.asm for the header layout.
 
 TB_START = 11
-CAL_START, CAL_END = 16, 144      # stage 1: 128 pulses, once
+CAL_START, CAL_END = 16, 80       # stage 1: 64 pulses from $ff7f (src/abi.asm cal_end)
 CAL_LEN = 64                       # the core: 64 pulses, then again
 H_DEF = 122
 HEADER_SEED = 0xa5
@@ -320,9 +320,8 @@ class Decoder:
                 elif CAL_START < self.count <= CAL_END:
                     self.elapsed += t
                 if self.count == CAL_END:
-                    e = min(self.elapsed, 65535)
-                    hi = 255 - ((65535 - e) >> 8)
-                    self.period = ((hi - 1) >> 1) + 1
+                    e = min(self.elapsed, 0xff7f)
+                    self.period = 255 - ((0xff7f - int(e)) >> 8)
                     self.cal = True
                 continue
             if x >= 3 or not self.cal:

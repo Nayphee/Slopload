@@ -305,12 +305,11 @@ def assemble(src, illegal=False):
                     listing.append((n, pc, b'', raw)); continue
                 if pc is None: raise AsmError("no *= origin before code")
                 code = bytearray()
-                if mnem in ('byte', '.byte'):
-                    vals, _ = parse_data(operand, labels, pc, scope, 1); code.extend(vals)
-                elif mnem in ('word', '.word'):
-                    vals, _ = parse_data(operand, labels, pc, scope, 2); code.extend(vals)
-                elif mnem in ('text', '.text'):
-                    vals, _ = parse_data(operand, labels, pc, scope, 1); code.extend(vals)
+                if mnem in ('byte', '.byte', 'word', '.word', 'text', '.text'):
+                    vals, undef = parse_data(operand, labels, pc, scope, 2 if 'word' in mnem else 1)
+                    code.extend(vals)
+                    if final and undef:             # (once 0, in silence: a typed-wrong name in a table)
+                        raise AsmError(f"undefined label in '{operand}'")
                 elif mnem in ('watch', 'incbin', 'incasm', 'incdir', 'include', 'align'):
                     if mnem in ('incbin', 'incasm', 'include') and final:
                         sys.stderr.write(f"warning line {n}: {mnem} not supported by verifier, skipped (prg studio's incbin is for its editor files; use byte lines for raw binary)\n")

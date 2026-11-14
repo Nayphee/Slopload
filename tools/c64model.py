@@ -235,9 +235,15 @@ def slm_music(path):
                 cyc=pc, zp=zp, ws=[tuple(w) for w in ws], relocs=relocs if movable else None)
 
 
+DRAW_CUTS = (0xcc00, 0xd000, 0xe000, 0xff40)     # a picture drawn in: its parts cut there (bank 3),
+DRAW_KEPT = ((0xcc00, 0xd000), (0xe000, 0xff40))    # these pieces kept back: its screen and bitmap
+
+
 def show_module():
     """the show module at SHOW_BASE and the offsets of its address high
-    bytes (assembled again a page on: the bytes one more)"""
+    bytes (assembled again a page on: the bytes one more), as SlopLoad 64
+    has it: up to its drawcode (a picture's drawing in, which SlopLoad
+    64's own never does), its claim the whole module's"""
     import build as B
     import contextlib
     import io
@@ -248,9 +254,10 @@ def show_module():
                                          'c64_show', {'showbase': base})
             out.append((data, labs))
     (d0, l0), (d1, _) = out
-    relocs = [i for i in range(len(d0)) if d0[i] != d1[i]]
+    cut = l0['drawcode'] - SHOW_BASE            # (a picture's drawing in: never SlopLoad 64's)
+    relocs = [i for i in range(cut) if d0[i] != d1[i]]
     assert all((d1[i] - d0[i]) & 255 == 1 for i in relocs), "the show module doesn't move by its high bytes"
-    return dict(data=bytes(d0), relocs=relocs, claim=l0['modend'] - SHOW_BASE)
+    return dict(data=bytes(d0[:cut]), relocs=relocs, claim=l0['modend'] - SHOW_BASE, hand=l0['hnseq'] - SHOW_BASE)
 
 
 def moved(m, at):
@@ -368,7 +375,8 @@ def show_share(m):
     return min(85, share)
 
 
-def setup(show, game=None, music=None, prog=(0x0801, 0x0802), wait=False, fade=False, count=False, then=None):
+def setup(show, game=None, music=None, prog=(0x0801, 0x0802), wait=False, fade=False, count=False, then=None,
+          waitgame=False, mstart='before'):
     """what SlopLoad 64 works out before the blocks: the module (a game,
     or the show module placed), its header patched, the parts in tape
     order (addr, data, io), the claims, the share and the jitter.
@@ -376,12 +384,20 @@ def setup(show, game=None, music=None, prog=(0x0801, 0x0802), wait=False, fade=F
     play, song (A for init), per_pal, per_ntsc, cyc, zp, ws, relocs (a
     prepared tune that can move, else None). fade: kept for old callers
     (the tune alone always fades out, as every module's tune); with a
-    module, wait and count (-wait,
-    -countdown) where it keeps them (its header's +27 bits 2, 3: SlopLoad
-    64 asks only then).
+    module, wait, waitgame and count (-wait, -waitgame, -countdown) where
+    it keeps them (its header's +27 bits 2, 5, 3: SlopLoad 64 asks only
+    then).
     then: a second module after the first (a chain: slopload.py's -then),
     its parts read from its file as the tape is written; wait and count
-    are its own"""
+    are its own. mstart: when the tune starts with a module (SlopLoad 64's
+    opt_mst, slopload.py's -musicstart): 'before' (the default) the show
+    module plays it while the module's parts load, then hands over to it
+    (as SlopLoad 64's mfirst: when the module keeps a tune playing on, its
+    file is under 10 KB, the show module's room in SlopLoad 64's high
+    pool, and there's a place for it and a share of 25% or more beside the
+    tune; else as 'first'); 'first' the first module starts it; 'second' a
+    chain's second does (the first's song $ff, its music fields as its
+    file has them)"""
     if show not in SHOWS:
         raise Refused(f"no show '{show}'")
     out = dict(show=show, module=None, parts=[], claims=[], share=None, jit=0, song=None, music=None)
@@ -415,31 +431,66 @@ def setup(show, game=None, music=None, prog=(0x0801, 0x0802), wait=False, fade=F
         head = bytearray(g['parts'][0][1])
         head[13] = 0xff if m is None else m['song']
         head[14] = g['share']
-        if m is not None:
-            head[16:25] = bytes([m['init'] & 255, m['init'] >> 8, m['play'] & 255, m['play'] >> 8,
-                                 m['per_pal'] & 255, m['per_pal'] >> 8, m['per_ntsc'] & 255,
-                                 m['per_ntsc'] >> 8, m['flags']])
+        mf = None if m is None else bytes([m['init'] & 255, m['init'] >> 8, m['play'] & 255, m['play'] >> 8,
+                                           m['per_pal'] & 255, m['per_pal'] >> 8, m['per_ntsc'] & 255,
+                                           m['per_ntsc'] >> 8, m['flags']])
+        late = bool(mstart == 'second' and b and m is not None)
+        # a picture that draws in (SlopLoad 64's drawq): the show module as a
+        # picture (+27 bit 6, +15 not $ff) in bank 3 (+25 0); it starts the
+        # tune itself, before its picture loads (no player first)
+        drawin = bool(len(head) > 28 and head[27] & 0x40 and head[15] != 0xff and head[25] == 0)
+        stage = None                        # the music first: the show module, where SlopLoad 64's
+        if (m is not None and mstart == 'before' and len(head) > 27 and head[27] & 0x10    # mfirst
+                and os.path.getsize(g['path']) < 0x2800 and not drawin):
+            sm = show_module()
+            base = place_show(sm['claim'], music_ranges(m) + both, prog)
+            try:
+                sshare = show_share(m) if base is not None else None
+            except Refused:
+                sshare = None
+            if sshare is not None:
+                d = bytearray(sm['data'])
+                for o in sm['relocs']:
+                    d[o] = (d[o] + ((base - SHOW_BASE) >> 8)) & 255
+                d[13] = m['song']
+                d[14] = sshare
+                d[15] = 0xff
+                d[16:25] = mf
+                d[25] = 0
+                d[28] = 0                   # (no ending: it hands over)
+                w = lambda o: d[o] | d[o + 1] << 8
+                stage = dict(addr=base, data=d, init=w(4), frame=w(6), stop=w(8), share=sshare,
+                             hand=sm['hand'])
+        if late:                            # (the first silent: its fields as its file has them)
+            head[13] = 0xff
+        elif mf:
+            head[16:25] = mf
         head[26] = 0                    # (+26: plan(), from what loads while it runs)
         kept = head[27] if len(head) > 27 else 0
-        if len(head) > 28 and kept & 0x0c:  # +28: the tool's options it keeps (bits 1, 3;
-            head[28] = (head[28] & 0xf5 | (2 if wait and kept & 4 and not b else 0)     # the rest as
-                        | (8 if count and kept & 8 and not b else 0))   # the file has them; a chain's
-        gparts = [(g['addr'], bytes(head))] + g['parts'][1:]           # first: none)
+        if len(head) > 28 and kept & 0x2c:  # +28: the tool's options it keeps (bits 1, 5, 3;
+            head[28] = head[28] & 0xd5 | (0 if b else ending_bits(kept, wait, waitgame, count))
+        if stage:                           # (+28 bit 4: the tune playing already)
+            head[28] |= 0x10
+        if drawin:                          # (+28 bit 6: its screen and bitmap after it starts)
+            head[28] |= 0x40
+        gparts = [(g['addr'], bytes(head))] + g['parts'][1:]           # (the rest as the file has
+                                                                        # them; a chain's first: none)
         hd = g['parts'][0][1]
         mod = dict(addr=g['addr'], init=g['init'], frame=g['frame'], stop=g['stop'], claims=both,
-                   jitter=g['jitter'], share=g['share'], bord=len(hd) > 27 and hd[27] & 1)
+                   jitter=g['jitter'], share=g['share'], bord=len(hd) > 27 and hd[27] & 1, stage=stage,
+                   drawin=drawin)
         parts = [(a, d, False) for a, d in gparts[1:]] + [(g['addr'], bytes(head), False)]
         if b:                               # the second: the song and the music's fields as the
             bh = bytearray(b['parts'][0][1])    # first's (not +15: a picture's background), +26
-            bh[13] = head[13]                   # plan()'s, its options its own, and the tune
-            if m is not None:                   # playing on (+28 bit 4) where it keeps it
-                bh[16:25] = head[16:25]
+            bh[13] = 0xff if m is None else m['song']   # plan()'s, its options its own, and the
+            if m is not None:                   # tune playing on (+28 bit 4) where it keeps it
+                bh[16:25] = mf                  # (late: the second starts it)
             bh[14] = b['share']
             bh[26] = 0
             bk = bh[27]
-            if bk & 0x0c:
-                bh[28] = bh[28] & 0xf5 | (2 if wait and bk & 4 else 0) | (8 if count and bk & 8 else 0)
-            if m is not None and bk & 0x10:
+            if bk & 0x2c:
+                bh[28] = bh[28] & 0xd5 | ending_bits(bk, wait, waitgame, count)
+            if m is not None and bk & 0x10 and not late:
                 bh[28] |= 0x10
             bd = b['parts'][0][1]
             mod.update(chain=dict(b=b, parts=[(b['addr'], bytes(bh))] + b['parts'][1:]),
@@ -476,6 +527,8 @@ def setup(show, game=None, music=None, prog=(0x0801, 0x0802), wait=False, fade=F
         parts = [(base, bytes(d), False)]
     if m is not None:
         parts.insert(0, (m['load'], m['data'], False))
+    if mod.get('stage'):                         # the music first: its player, the boot's last part
+        parts.insert(1, (mod['stage']['addr'], mod['stage']['data'], False))
     claims = list(mod['claims'])                 # the program's bytes there load after the show
     if m is not None:
         claims += music_ranges(m)
@@ -486,9 +539,18 @@ def setup(show, game=None, music=None, prog=(0x0801, 0x0802), wait=False, fade=F
     return out
 
 
+def ending_bits(kept, wait, waitgame, count):
+    """a module's +28 bits for the tool's options it keeps (its +27,
+    kept): bit 1 -wait (SPACE: +27 bit 2), bit 5 -waitgame (a game's end:
+    +27 bit 5), bit 3 -countdown (+27 bit 3)"""
+    return ((2 if wait and kept & 4 else 0) | (0x20 if waitgame and kept & 0x20 else 0)
+            | (8 if count and kept & 8 else 0))
+
+
 def plan(prg_addr, prg, show='none', game=None, music=None, speed=0, start=None,
          autorun=False, name=None, phase=2, stops=True, lines=0, fcol=6, fx=0, fxn=5, fxb=0, own=None,
-         showl=False, cycle=False, wait=False, fade=False, count=False, then=None):
+         showl=False, cycle=False, wait=False, fade=False, count=False, then=None, waitgame=False,
+         mstart='before'):
     """the blocks, in tape order: dicts with addr, data, flags, h, m, pilot
     (pulses), trailer (pulses), bridge, prog, seq; and the core image and
     stage 1. show, game (the module), music: as setup(). stops: the motor
@@ -501,8 +563,9 @@ def plan(prg_addr, prg, show='none', game=None, music=None, speed=0, start=None,
     own, a list (as -stripes 6,14,3). showl: the lines on
     through the module or show (slopload.py's -showstripes). cycle: the
     border a colour on each page (-cycle: an effect, or one colour, black
-    included, which runs as the plain effect; a module or show needs the
-    lines through it). wait, fade: the show's ending (setup's). then: a
+    included, which runs as the plain effect; with a module or show it
+    keeps the lines on through it). wait, waitgame, fade: the show's
+    ending (setup's). then: a
     chain's second module (setup's): its blocks after the first's, in its
     file's order, at the first's speed and share, the last flagged
     f_chain; the switch (src/chain.asm) the first's last part"""
@@ -521,7 +584,7 @@ def plan(prg_addr, prg, show='none', game=None, music=None, speed=0, start=None,
         elif smode != 'fx':
             raise Refused("the border cycle goes with an effect or one colour")
     end = prg_addr + len(prg)
-    su = setup(show, game, music, (prg_addr, end), wait, fade, count, then)
+    su = setup(show, game, music, (prg_addr, end), wait, fade, count, then, waitgame, mstart)
     g = su['module']
     jit = su['jit']
     ch = g.get('chain') if g else None
@@ -537,12 +600,11 @@ def plan(prg_addr, prg, show='none', game=None, music=None, speed=0, start=None,
     pmin_live = PMIN + (S.STRIPES_COST if smode == 'table' and su.get('screen_on') else 0)
     if fxs and su.get('screen_on'):              # (an effect: 6-10 cycles more; -cycle 3)
         pmin_live = PMIN + S.FX.get(fxs['name'], 0) + (S.CYCLE_COST if cycle else 0)
-    strs = bool(showl and g and smode not in ('flat', 'block'))
+    strs = bool((showl or cycle) and g and smode not in ('flat', 'block'))   # (the cycle: the lines on)
     if strs and not g.get('bord', True):         # (the show module leaves it)
         raise Refused("the module keeps its border: the lines can't go on through it")
-    if cycle and g and not strs:
-        raise Refused("the border cycle needs the lines on through the show")
     live = best_set(h_live, pmin_live, su['share']) if g else boot
+    stage_set = best_set(h_boot, PMIN, g['stage']['share']) if g and g.get('stage') else None
     if ch:                                       # the second's blocks: the first's speed
         h_chain = min(S.H_MAX, S.ceil4(S.speed_h(speed) + g['cjit']))
         live_c = best_set(h_chain, pmin_live, g['cshare'])
@@ -588,7 +650,23 @@ def plan(prg_addr, prg, show='none', game=None, music=None, speed=0, start=None,
                 cb.append((a + i, d[i:i + BLOCK]))
         nchain = sum(len(d) for _, d in ch['parts'])
         neff = max(256, nchain - 512)            # (full two pages early: slopload.py's)
-    for a, d, io in parts:
+    stg = g.get('stage') if g else None
+    ndraw = None
+    if g and g.get('drawin'):                    # a picture drawn in (SlopLoad 64's dpart, drawn):
+        first, kept = [], []                     # each part cut at $cc00, $d000, $e000, $ff40, the
+        for a, d, io in parts:                   # pieces in its screen and bitmap kept back, then
+            cuts = [c for c in DRAW_CUTS if a < c < a + len(d)]     # added after the rest, the last
+            for lo, hi in zip([a] + cuts, cuts + [a + len(d)]):     # kept back first
+                piece = (lo, d[lo - a:hi - a], io)
+                (kept if any(r0 <= lo < r1 for r0, r1 in DRAW_KEPT) else first).append(piece)
+        parts = first + kept[::-1]
+        ndraw = len(first)
+    nbootb = ndrawb = 0
+    for k, (a, d, io) in enumerate(parts):
+        if stg and k == 2:                       # (the music first: the tune and its player first)
+            nbootb = len(gb)
+        if k == ndraw:
+            ndrawb = len(gb)
         for i in range(0, len(d), BLOCK):
             gb.append((a + i, d[i:i + BLOCK], io))
     if ch:                                       # +26: the first counts the second's blocks,
@@ -610,9 +688,30 @@ def plan(prg_addr, prg, show='none', game=None, music=None, speed=0, start=None,
         d[26] = min(255, -(-(total + 2) // 254))
         gb[k] = (a, bytes(d), io)
     last = T.F_GAMEREADY | (0 if lb else T.F_MAINEND)   # (no program while it runs: it ends the main load)
+    if stg:                                      # the player's hand-over (SlopLoad 64's mkcore): when
+        k = next(i for i, (a, d, io) in enumerate(gb) if a == stg['addr'])      # the module's parts are
+        a, d, io = gb[k]                         # in, to its init, frame and stop (or the switch's),
+        d = bytearray(d)                         # the progress a page from then on
+        h0 = stg['hand']
+        d[h0] = len(gb)
+        d[h0 + 1:h0 + 7] = bytes([g['init'] & 255, g['init'] >> 8]) + (
+            bytes([sw['cframe'] & 255, sw['cframe'] >> 8, sw['cstop'] & 255, sw['cstop'] >> 8]) if ch else
+            bytes([g['frame'] & 255, g['frame'] >> 8, g['stop'] & 255, g['stop'] >> 8]))
+        st_ = min(65535, round(16777216 / (neff if ch else max(1, total))))
+        d[h0 + 7:h0 + 9] = bytes([st_ & 255, st_ >> 8])
+        gb[k] = (a, bytes(d), io)
     for i, (a, d, io) in enumerate(gb):
-        blocks.append(dict(addr=a, data=d, flags=last if i == len(gb) - 1 else 0,
-                           kind='module', pilot_s=PILOT_RESTART, prog=0, io=io))
+        if stg and i < nbootb:                   # (the music first: the tune, its player: they start)
+            fl = T.F_GAMEREADY if i == nbootb - 1 else 0
+            kind = 'module'
+        elif ndraw is not None:                  # (drawn in: it starts before them; they load as
+            fl = (T.F_GAMEREADY if i == ndrawb - 1 else 0) | (           # the program does)
+                last & ~T.F_GAMEREADY if i == len(gb) - 1 else 0)
+            kind = 'drawn' if i >= ndrawb else 'module'
+        else:
+            fl = (last & ~T.F_GAMEREADY if stg else last) if i == len(gb) - 1 else 0
+            kind = 'stage' if stg else 'module'
+        blocks.append(dict(addr=a, data=d, flags=fl, kind=kind, pilot_s=PILOT_RESTART, prog=0, io=io))
     done = 0
     for i, (a, d) in enumerate(cb):
         blocks.append(dict(addr=a, data=d, flags=T.F_CHAIN if i == len(cb) - 1 else 0, kind='chain',
@@ -639,11 +738,12 @@ def plan(prg_addr, prg, show='none', game=None, music=None, speed=0, start=None,
         last = i == len(blocks) - 1
         if b['addr'] < 0xe000 and b['addr'] + len(b['data']) > 0xd000 and not b.get('io'):
             b['flags'] |= T.F_UNDERIO
-        running = b['kind'] in ('live', 'chain') and g is not None
-        hl, sl, ll = (h_chain, g['cshare'], live_c) if b['kind'] == 'chain' else (h_live, su['share'], live)
+        running = b['kind'] in ('live', 'chain', 'stage', 'drawn') and g is not None
+        hl, sl, ll = ((h_chain, g['cshare'], live_c) if b['kind'] == 'chain' or b['kind'] == 'drawn' and ch else
+                      (h_boot, stg['share'], stage_set) if b['kind'] == 'stage' else (h_live, su['share'], live))
         if phase == 2:
-            h, m, pfx, key, body = choose(b['data'], hl if running else h_boot,
-                                          sl if running else None, pmin_live if running else PMIN)
+            h, m, pfx, key, body = choose(b['data'], hl if running else h_boot, sl if running else None,
+                                          pmin_live if running and b['kind'] != 'stage' else PMIN)
         else:
             h, m = ll if running else boot
             pfx, key = False, T.best_key(b['data'])
@@ -670,13 +770,17 @@ def plan(prg_addr, prg, show='none', game=None, music=None, speed=0, start=None,
         put('pt_init', g['init'], 2)
         put('pt_frame', sw['cframe'] if ch else g['frame'], 2)
         put('pt_stop', sw['cstop'] if ch else g['stop'], 2)
+    if stg:                                      # the music first: its player is the core's module
+        put('pt_init', stg['init'], 2)           # until it hands over
+        put('pt_frame', stg['frame'], 2)
+        put('pt_stop', stg['stop'], 2)
     put('x_run', 1 if run else 0, at=1)
     put('x_jmp', start or 0, 2, at=1)
     put('x_port', 0x37, at=1)
     put('x_irq', 0x58)
     put('x_vt1', end & 255, at=1)
     put('x_vt2', end >> 8, at=1)
-    put('pt_step', min(65535, round(16777216 / (neff if ch else max(1, total)))), 2)
+    put('pt_step', 0 if stg else min(65535, round(16777216 / (neff if ch else max(1, total)))), 2)
     if smode == 'table':
         for i, c in enumerate(S.stripe_table(spec)):
             put('stab', c, at=i)
@@ -684,13 +788,18 @@ def plan(prg_addr, prg, show='none', game=None, music=None, speed=0, start=None,
         put('bflat', 0xa2)                       # ldx #colour (else ldx ld_seq)
         put('bflat', scol, at=1)
     put('pt_strs', 0x20 if strs else 0)
-    if cycle:                                    # the border a colour on each page
+    line_cycle = bool(cycle and fxs and fxs['name'] == 'line')
+    if cycle and not line_cycle:                 # the border a colour on each page
         for i, b in enumerate((0xee, 0x20, 0xd0)):
             put('cycle', b, at=i)
     if fxs:                                      # the effect (slopload.py's)
         for i, b in enumerate(fxs['code']):
             put('stripe', b, at=i)
         put('fxbc', fxs['base'], at=1)
+        if line_cycle:                           # line: its border's colour one on a block (stron)
+            to = cs['stripe'] + fxs['cat']
+            for i, b in enumerate((0xee, to & 255, to >> 8, 0xc9, 0x00)):
+                put('fxbc', b, at=i)
         put('fxa1', fxs['a'][0], at=1)
         put('fxb1', fxs['b'][0], at=1)
         put('fxa0', fxs['a'][1], at=1)

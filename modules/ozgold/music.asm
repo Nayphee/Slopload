@@ -1,4 +1,4 @@
-; from music/build/ozgold.sid, sha256 7a3821cbdebe34b2863f8ac1dff97a393901b8d257003bfd30e8911a08f2c5b7, page $e9, moved by tools e31e2a284c02d9ee
+; from music/build/ozgold.sid, sha256 7a3821cbdebe34b2863f8ac1dff97a393901b8d257003bfd30e8911a08f2c5b7, page $e9, moved by tools 7e8984eceb4ed1bf
 ; (made by mkdata.py: the tune moved to its place in the module)
 ; OZ Gold / Traditional, arr. Slopmasters / 2026 Slopmasters: song 1, 2696 bytes, play call 2144 cycles at most
 oz_init = $e900
