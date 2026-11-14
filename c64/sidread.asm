@@ -1,35 +1,39 @@
 ; ------------------------------------------------------------
 ; sidread.asm  -  a .sid made ready for SlopLoad 64: for SID-SLM. Moved
 ; out of SlopLoad 64 (setup.asm), which now takes the .slm SID-SLM writes.
-;   ldsid    a PSID file at stage (flen bytes, the stage's first ones when
-;            it's longer): its header checked, the
-;            song (asked if it has several), its bytes to the music pool,
-;            the trial run (trial.asm), its play rate; mok 1, or 2 when
-;            refused (said by mrefuse)
-;   trysid   the trial run, then sidrate
+;   sidhdr   a PSID file at stage (flen bytes, the stage's first ones when
+;            it's longer): its header checked, its fields (mload ...
+;            mspd, mtitle, mdat); c set if refused (said by mrefuse)
+;   sidstart msong: the header's start song
+;   asksong  msong asked, 1 to msongs
+;   ldgo     a tune's fields set (a .sid's by sidhdr, a PRG tune's by
+;            SID-SLM's prghdr; ma its song): its bytes to the music pool,
+;            the trial run (trial.asm), its play rate; over 4096 bytes its
+;            song cut first (asked); mok 1, or 2 when refused (said)
+;   trysid   the trial run, then the play rate: sidrate, or a PRG tune's
+;            prgrate (mprg)
 ;   sidrate  mppal, mpntsc from the header's speed bit and clock, and the
 ;            CIA latch the tune set; mcia 1 when CIA timed
 ; The includer: the variables (mload ... mspd, mcia, mtitle, mok, mcut,
-; mdat, mcalls), stage, flen, mpool, npool, trcalls, mrefuse and the
-; reasons (r_*), mtoolong (over 4096 bytes: mcut, or refused), cutsid
-; (the song cut, then trysid), asc2pet, tomusp, asknum, scrat's screen
-; ($0288), cpu, fast, slow (machine.asm), mul16, divn (math.asm),
+; mdat, mcalls, mprg), stage, flen, mpool, npool, trcalls, mrefuse and
+; the reasons (r_*), mtoolong (over 4096 bytes: mcut, or refused), cutsid
+; (the song cut, then trysid), prgrate, asc2pet, tomusp, asknum, scrat's
+; screen ($0288), cpu, fast, slow (machine.asm), mul16, divn (math.asm),
 ; trial.asm and sidcut.asm.
 ; ------------------------------------------------------------
 
 ; ------------------------------------------------------------
-; ldsid  a PSID file at stage: its header, the song, its bytes to the
-; music pool, then the trial run (trial.asm) and its play rate
+; sidhdr  a PSID file at stage: its header checked, its fields (not the
+; song: sidstart, asksong); c set if refused (said)
 ; ------------------------------------------------------------
-ldsid   lda #0
+sidhdr  lda #0
         sta mwhya
         sta mwhya+1
-        sta mcut
         lda stage+13            ; play (big-endian): 0, no play routine
         ora stage+12
         bne @pl
         lda #r_noplay
-        jmp mrefuse
+        jmp hrefuse
 @pl     lda stage+5             ; version 3 and 4: a second, third SID
         cmp #3
         bcc @v
@@ -37,7 +41,7 @@ ldsid   lda #0
         ora stage+$7b
         beq @v
         lda #r_sids
-        jmp mrefuse
+        jmp hrefuse
 @v      lda stage+15            ; songs (1 at least)
         bne @sn
         lda #1
@@ -46,14 +50,7 @@ ldsid   lda #0
         beq @s1
         lda #255
         sta msongs
-@s1     lda stage+17            ; the start song (1 if it isn't one)
-        beq @st1
-        cmp msongs
-        beq @st
-        bcc @st
-@st1    lda #1
-@st     sta msong
-        lda #1
+@s1     lda #1
         sta mkind
         lda stage+6             ; the data: its offset (big-endian): $76
         beq @off                ; or $7c, so a high byte is a damaged file
@@ -114,11 +111,7 @@ ldsid   lda #0
         bcc @bad
         ora mlen
         beq @bad
-        jsr mtoolong
-        bcc @len
-        clc                     ; (refused, not an error: mok 2)
-        rts
-@len    ldx #0                  ; its name (shown in the menu)
+        ldx #0                  ; its name (shown in the menu)
 @nm     lda stage+$16,x
         jsr asc2pet
         sta mtitle,x
@@ -129,17 +122,6 @@ ldsid   lda #0
         sta mdat
         lda p2+1
         sta mdat+1
-        lda mcut                ; its bytes to the music pool (cut: later)
-        bne @song
-        jsr tomusp
-@song   lda msongs              ; the song
-        cmp #2
-        bcc @one
-        jsr asksong
-@one    lda msong
-        sec
-        sbc #1
-        sta ma
         lda stage+5             ; the header's version, flags, speed bits:
         sta mver                ; kept (the trial's scratch is where the
         lda stage+$77           ; file was)
@@ -149,16 +131,48 @@ ldsid   lda #0
         sta mspd,x
         dex
         bpl @sp
-        lda mcut                ; over 4096 bytes: its song cut down first
+        clc
+        rts
+@bad    lda #r_notmus
+hrefuse jsr mrefuse             ; (refused: said; c set)
+        sec
+        rts
+
+; sidstart  msong: the header's start song (1 if it isn't one)
+sidstart
+        lda stage+17
+        beq @st1
+        cmp msongs
+        beq @st
+        bcc @st
+@st1    lda #1
+@st     sta msong
+        rts
+
+; ------------------------------------------------------------
+; ldgo  the tune (mload, mlen, minit, mplay, mdat: its bytes in the
+; stage; ma its song) to the music pool and tried out; over 4096 bytes
+; its song cut down first (asked: mtoolong). mok 1, or 2 if refused
+; (said)
+; ------------------------------------------------------------
+ldgo    lda #0
+        sta mcut
+        jsr mtoolong
+        bcc @len
+        rts                     ; (refused: mok 2)
+@len    lda mcut                ; over 4096 bytes: its song cut down first
         beq @try
         jmp cutsid
-@try    lda #<trcalls
+@try    lda mdat                ; its bytes to the music pool
+        sta p2
+        lda mdat+1
+        sta p2+1
+        jsr tomusp
+        lda #<trcalls
         sta mcalls
         lda #>trcalls
         sta mcalls+1
         jmp trysid
-@bad    lda #r_notmus
-        jmp mrefuse
 
 ; asksong  msong from 1-msongs (the start song by default)
 asksong ldx #<q_song
@@ -267,8 +281,12 @@ trysid  lda mload
         sta mcyc
         lda tr_cyc+1
         sta mcyc+1
-        jsr sidrate
-        bcc @fine
+        lda mprg                ; its play rate: a PRG tune's as given
+        beq @sr
+        jsr prgrate
+        jmp @rk
+@sr     jsr sidrate
+@rk     bcc @fine
         rts
 @fine   lda #1
         sta mok
@@ -331,7 +349,7 @@ scrat   lda #0
 ; ------------------------------------------------------------
 ; sidrate  mppal, mpntsc: the time between play calls (1/64 lines), from
 ; the PSID header (the song's speed bit: CIA timed; its clock: NTSC or
-; not) and the CIA latch the tune set (tr_latch; none: $4025), in
+; not) and the CIA latch the tune set (tr_latch; none: $4025, or $4295 for an NTSC tune), in
 ; integers (tests/sidslm.py has the same rule)
 ;   out:  c set if refused (said)
 ; ------------------------------------------------------------
@@ -393,10 +411,14 @@ sidrate lda #0                  ; ntsc: the header's clock is NTSC only
         lda tr_latch            ; l1 = latch + 1 (65535 at most)
         ora tr_latch+1
         bne @l
-        lda #<$4025
-        sta tr_latch
-        lda #>$4025
-        sta tr_latch+1
+        ldx #<$4025             ; (none set: the KERNAL's 60 Hz timer, a PAL
+        ldy #>$4025             ; machine's or, for a tune made for NTSC, an
+        lda t6                  ; NTSC one's: with $4025 that tune came out
+        beq @d                  ; 3.8% fast)
+        ldx #<$4295
+        ldy #>$4295
+@d      stx tr_latch
+        sty tr_latch+1
 @l      lda tr_latch
         clc
         adc #1

@@ -14,7 +14,7 @@
 ;   prout    outname, in quotes
 ;
 ; The includer: wold, wnew, the texts tx_ask ("]? "), and io.asm (dstat,
-; prstat, readline, print, cmdopen); zero page t4, p1 (2), cnt (2).
+; prstat, readline, print); zero page t4, t6, p1 (2), cnt (2).
 ; ------------------------------------------------------------
 
 outlen  byte 0                  ; the name written
@@ -230,21 +230,18 @@ scratch ldx #0
         cpy outlen
         bcc @n
         stx t4
-        lda #15                 ; the command channel: lfn 15 (dstat opened it)
-        jsr close
-        lda #0
-        sta cmdopen+1
-        lda #15
-        ldx prgdev
-        ldy #15
-        jsr setlfs
-        lda t4
-        ldx #<cmdbuf
-        ldy #>cmdbuf
-        jsr setnam
-        jsr open
-        lda #1
-        sta cmdopen+1
+        lda prgdev              ; to its drive's command channel (dstat
+        jsr dstat               ; opens it: t6 its file), then its answer
+        ldx t6
+        jsr chkout
+        bcs @st
+        ldx #0
+@s      lda cmdbuf,x
+        jsr chrout
+        inx
+        cpx t4
+        bcc @s
+@st     jsr clrchn
         lda prgdev
         jmp dstat
 

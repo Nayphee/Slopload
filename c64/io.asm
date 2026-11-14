@@ -1,6 +1,7 @@
 ; ------------------------------------------------------------
-; io.asm  -  SlopLoad 64's screen and disk: text out and in, the
-; program file (read), the .tap file (written), the drive's status
+; io.asm  -  the tools' screen and disk: text out and in, the drive's
+; status (iohex.asm: hexadecimal; ioprg.asm: SlopLoad 64's program file
+; and .tap file)
 ; ------------------------------------------------------------
 
 ; ------------------------------------------------------------
@@ -18,27 +19,6 @@ print   stx p3
         inc p3+1
         bne @c
 @x      rts
-
-; prhex4  a/x (lo/hi) as $hhhh; prhex2  a as hh
-prhex4  pha
-        lda #'$'
-        jsr chrout
-        txa
-        jsr prhex2
-        pla
-prhex2  pha
-        lsr a
-        lsr a
-        lsr a
-        lsr a
-        jsr @d
-        pla
-        and #15
-@d      cmp #10
-        bcc @n
-        adc #6                  ; (carry set) 'a'-'9'-1
-@n      adc #'0'
-        jmp chrout
 
 ; ------------------------------------------------------------
 ; prdec  the 24-bit number n24 (3 bytes) in decimal
@@ -213,77 +193,49 @@ innum   lda #0
         ldx #1
         rts
 
-; inhex  inbuf as a hexadecimal word ($ optional): a/x, c set if not one
-inhex   lda #0
-        sta t0
-        sta t1
-        ldy #0
-        cpy inlen
-        beq @bad
-        lda inbuf
-        cmp #'$'
-        bne @c
-        iny
-@c      cpy inlen
-        beq @ok
-        lda inbuf,y
-        sec
-        sbc #'0'
-        cmp #10
-        bcc @d
-        sbc #7                  ; 'a' -> 10
-        cmp #10
-        bcc @bad
-        cmp #16
-        bcs @bad
-@d      ldx t1                  ; a fifth digit: not an address (it was
-        cpx #$10                ; dropped, 12345 taken as $2345)
-        bcs @bad
-        ldx #4
-@sh     asl t0
-        rol t1
-        dex
-        bne @sh
-        ora t0
-        sta t0
-        iny
-        bne @c
-@ok     lda t0
-        ldx t1
-        clc
-        rts
-@bad    sec
-        rts
-
 ; ------------------------------------------------------------
 ; the drive's status: dstat  read channel 15 of drive a into dsbuf;
 ; c set if it isn't "00" (or 73, the power-on message)
+;   out:  t6 the command channel's file (13-15)
 ;   uses: a, x, y
+;   note: a drive's command channel is opened once and left open, since
+;         closing it closes every file open on that drive. Three files
+;         (13, 14, 15), each with its drive: the one this drive has
+;         already, else one given up, never the program's drive's nor
+;         cmdkeep's (a drive with a file being written). SlopLoad 64
+;         has three files open at most (the program, the .tap, a
+;         second module), each on a drive of its own if need be. A tool
+;         that only asks for prgdev's status is always given file 15.
 ; ------------------------------------------------------------
-dstat   ldy #15                 ; lfn 15 for the program's drive, 14 for
-        cmp prgdev              ; the other: opened once and left open
-        bne @o                  ; (closing it closes the drive's files);
-        cmp cmd15dev            ; either closed when its drive is another
-        beq @l                  ; than before
-        sta cmd15dev
-        bne @cl                 ; (z: the cmp's, not equal)
-@o      ldy #14
-        cmp cmd14dev
+dstat   ldy #15                 ; a file on this drive already?
+@f      cmp cmddev-13,y
         beq @l
-        sta cmd14dev
-@cl     pha
-        lda cmdopen-14,y
+        dey
+        cpy #13
+        bcs @f
+        ldy #15                 ; none: one given up
+@v      ldx cmddev-13,y
+        cpx prgdev
+        beq @nv
+        cpx cmdkeep
+        bne @take
+@nv     dey
+        cpy #13                 ; (two kept at most: the third is free)
+        bne @v
+@take   sta cmddev-13,y
+        pha
+        lda cmdopen-13,y
         beq @l0
         sty t6
         tya
         jsr close
         ldy t6
         lda #0
-        sta cmdopen-14,y
+        sta cmdopen-13,y
 @l0     pla
 @l      sty t6
         tax
-        lda cmdopen-14,y
+        lda cmdopen-13,y
         bne @rd
         lda #0                  ; is a drive there? LISTEN and a secondary
         sta $90                 ; address: st bit 7 if none answers (an OPEN
@@ -309,7 +261,7 @@ dstat   ldy #15                 ; lfn 15 for the program's drive, 14 for
         bne @nodev
         ldy t6
         lda #1
-        sta cmdopen-14,y
+        sta cmdopen-13,y
 @rd     ldx t6
         jsr chkin
         ldx #0
@@ -348,22 +300,27 @@ dstat   ldy #15                 ; lfn 15 for the program's drive, 14 for
         bne @cp
 @no     sec
         rts
-cmdopen byte 0,0                ; lfn 14, 15 open
-cmd14dev byte 0                 ; lfn 14's drive
-cmd15dev byte 0                 ; lfn 15's (the program's drive when opened)
+cmdopen byte 0,0,0              ; files 13, 14, 15: open
+cmddev  byte 0,0,0              ; ... their drives (0: none yet)
+cmdkeep byte $ff                ; a drive whose file is kept ($ff: none)
 k_listen = $ffb1                ; (KERNAL: the serial bus)
 k_second = $ff93
 k_unlsn = $ffae
 
-; cmdclose  both command channels closed (no files open then)
+; cmdclose  the command channels closed (no files open then)
 cmdclose
-        lda #14
+        ldx #2
+@c      txa
+        pha
+        clc
+        adc #13
         jsr close
-        lda #15
-        jsr close
+        pla
+        tax
         lda #0
-        sta cmdopen
-        sta cmdopen+1
+        sta cmdopen,x
+        dex
+        bpl @c
         rts
 
 ; prstat  print the drive's status line
@@ -371,143 +328,5 @@ prstat  ldx #<dsbuf
         ldy #>dsbuf
         jmp print
 
-; ------------------------------------------------------------
-; the program file: openprg (channel 2 on prgdev, name prgname), its
-; load address read into paddr; rdbyte one byte (c set at the end, or
-; at a read error: rderr 1 then; z
-; clear: the last byte was read); closeprg
-; ------------------------------------------------------------
-openprg lda #2
-        ldx prgdev
-        ldy #2
-        jsr setlfs
-        lda prglen
-        ldx #<prgname
-        ldy #>prgname
-        jsr setnam
-        jsr open
-        lda prgdev
-        jsr dstat
-        bcs @bad
-        ldx #2
-        jsr chkin
-        jsr chrin
-        sta paddr
-        jsr chrin
-        sta paddr+1
-        jsr readst
-        and #$bf                ; (end of file: a 2-byte file is still one)
-        bne @rd
-        lda #0
-        sta eof
-        sta rderr
-        clc
-        rts
-@rd     jsr closeprg
-        ldx #<tx_rderr
-        ldy #>tx_rderr
-        jsr print
-        sec
-        rts
-@bad    jsr closeprg
-        jsr prstat
-        sec
-        rts
-
-rdbyte  lda eof
-        bne @end
-        jsr chrin
-        pha
-        jsr readst
-        tax
-        and #$bf                ; a read error: the end, and rderr says why
-        bne @er                 ; (not the end of the file: the program
-        txa                     ; would be taken as shorter)
-        and #$40
-        sta eof
-        pla
-        clc
-        rts
-@er     lda #1
-        sta rderr
-        sta eof
-        pla
-@end    lda #0
-        sec
-        rts
-rderr   byte 0                  ; 1: the last read stopped at an error
-
-closeprg
-        jsr clrchn
-        lda #2
-        jmp close
-
-; ------------------------------------------------------------
-; the .tap file: tapopen (channel 3 on tapdev, "name,p,w"), tapout (its
-; chkout), taphead (the 20-byte header with the size), tapclose
-; ------------------------------------------------------------
-tapopen ldx tapfnl              ; name,p,w after the typed name
-        lda #','
-        sta tapfname,x
-        lda #'p'
-        sta tapfname+1,x
-        lda #','
-        sta tapfname+2,x
-        lda #'w'
-        sta tapfname+3,x
-        txa
-        clc
-        adc #4
-        ldx #<tapfname
-        ldy #>tapfname
-        jsr setnam
-        lda #3
-        ldx tapdev
-        ldy #3
-        jsr setlfs
-        jsr open
-        lda tapdev
-        jsr dstat
-        bcc @ok
-        jsr prstat
-        lda #3
-        jsr close
-        sec
-@ok     rts
-
-tapout  ldx #3
-        jmp chkout
-
-taphead jsr tapout
-        ldx #0
-@c      lda tx_c64tape,x
-        jsr chrout
-        inx
-        cpx #16
-        bcc @c
-        lda tapn                ; the size: the pulses (one byte each)
-        jsr chrout
-        lda tapn+1
-        jsr chrout
-        lda tapn+2
-        jsr chrout
-        lda #0
-        jsr chrout
-        jmp clrchn
-
-tapclose
-        jsr clrchn
-        lda #3
-        jsr close
-        lda tapdev
-        jsr dstat
-        bcc @x
-        jsr prstat              ; (c set: the drive's error, said)
-        sec
-@x      rts
-
-tx_c64tape
-        byte $43,$36,$34,$2d,$54,$41,$50,$45,$2d,$52,$41,$57   ; "C64-TAPE-RAW"
-        byte 1,0,0,0
 tx_nodev text "no drive there",13,0
 tx_rderr text "read error",13,0

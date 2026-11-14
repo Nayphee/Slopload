@@ -12,6 +12,7 @@
 
 bok     byte 0                  ; a second module chosen
 chainon byte 0                  ; ... and a chain on this tape (prepare: the show a module)
+mlate   byte 0                  ; ... the tune starting with its second (opt_late, a chain)
 bdev    byte 8
 bnlen   byte 0                  ; its file's name
 bname   byte 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
@@ -146,9 +147,10 @@ athen   lda bdev
 @back   jsr gswap
 @x      rts
 tx_then text "then a module, parts at ",0
-tx_bshare text "the two modules share memory: the second",13
-        text "loads while the first runs (petscii-lm",13
-        text "writes a screen at $a000 for a chain)",13,0
+tx_bshare text "the two modules share memory: the",13
+        text "second loads while the first runs",13
+        text "(petscii-lm writes a screen at $a000",13
+        text "for a chain)",13,0
 
 ; ------------------------------------------------------------
 ; chgame  prgame's chain: the second's claims beside the first's
@@ -188,15 +190,20 @@ chhead  lda chainon
         sta bhdr+16,x
         dex
         bpl @m
-@o      lda bbord
-        and #$0c
+@o      lda bhdr+28             ; (bit 4 each tape's own: off first, a tape
+        and #$ef                ; before in the session may have set it)
+        sta bhdr+28
+        lda bbord
+        and #$2c
         beq @b4
         lda bhdr+28
-        and #$f5
+        and #$d5
         ora opt_gopt
         sta bhdr+28
-@b4     lda muse
-        beq @x
+@b4     lda muse                ; (the tune playing on, unless it starts
+        beq @x                  ; with this one: mlate)
+        lda mlate
+        bne @x
         lda bbord
         and #$10
         ora bhdr+28

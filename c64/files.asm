@@ -123,8 +123,8 @@ tx_empty text "it's empty",13,0
 
 ; ------------------------------------------------------------
 ; hput / hget  a byte to / from (p1),y, the high pool's RAM under the
-; I/O and the KERNAL too (hget: n and z as the byte); hget3 / hput3 the
-; same at p3
+; I/O and the KERNAL too (hget: n and z as the byte); hput3 the same at
+; p3
 ;   uses: a (hget: the byte)
 ; ------------------------------------------------------------
 hput    php
@@ -151,18 +151,6 @@ hget    php
         pla
         plp
         ora #0                  ; (its flags)
-        rts
-hget3   php
-        sei
-        lda #$34
-        sta $01
-        lda (p3),y
-        pha
-        lda #$36
-        sta $01
-        pla
-        plp
-        ora #0
         rts
 hput3   php
         sei

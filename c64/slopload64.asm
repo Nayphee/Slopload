@@ -90,12 +90,15 @@ maxblk = 40
 
         incasm "writer.asm"
         incasm "io.asm"
+        incasm "iohex.asm"
+        incasm "ioprg.asm"
         incasm "words.asm"      ; (generated: tools/c64build.py packs the messages)
         incasm "plan.asm"
         incasm "ui.asm"
         incasm "disk.asm"
         incasm "coding.asm"
         incasm "machine.asm"
+        incasm "machsay.asm"
         incasm "xmem.asm"
         incasm "files.asm"
         incasm "setup.asm"

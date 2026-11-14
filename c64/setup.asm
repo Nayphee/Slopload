@@ -647,17 +647,18 @@ lbusy   byte 3                  ; ... and i/o: no tune there
         word $0000,$0800,$d000,$e000,$fffa,$ffff
 lbusyws byte 3                  ; a tune's workspace: not these
         word $0000,$0200,$0400,$0800,$fffa,$ffff
-lmcl    byte 0                  ; the game's claims
-        word 0,0,0,0,0,0,0,0
+lmcl    byte 0                  ; the game's claims: a module's 4 at most, and
+        word 0,0,0,0,0,0,0,0    ; a chain's second module's 4 beside them (8:
+        word 0,0,0,0,0,0,0,0    ; with 4, the second's ran on into lmus)
 lmus    byte 0                  ; the tune and its workspace (17)
         word 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
-lban    byte 0                  ; place_show's: loader, i/o, the tune (20)
+lban    byte 0                  ; place_show's: loader, i/o (3), the tune (17),
         word 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
-        word 0,0,0,0,0,0
-lclaim  byte 0                  ; the claims: the program there loads after (24)
+        word 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0   ; the modules (8): 28
+lclaim  byte 0                  ; the claims: the program there loads after
         word 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
-        word 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
-maxclaim = 24
+        word 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0     ; (26: the modules' 8, the
+maxclaim = 26                   ; tune's 17, one spare)
 
 ; rovl  c set if the range t0/t1-t2/t3 overlaps one in the list at a/y
 ;   uses: a, y, p3 (the range kept)
@@ -1151,7 +1152,14 @@ plshow  lda #0
         lda #>lmus
         sta lcsrc+1
         jsr lcopy
-@nm     lda #$ff                ; the best so far: none
+@nm     lda plsmc               ; (the music first: clear of the modules
+        beq @nc                 ; too, whose parts load while it plays)
+        lda #<lmcl
+        sta lcsrc
+        lda #>lmcl
+        sta lcsrc+1
+        jsr lcopy
+@nc     lda #$ff                ; the best so far: none
         sta sbest
         sta sbest+1
         sta sbest+2
@@ -1217,6 +1225,7 @@ plshow  lda #0
         cmp #1                  ; (c set: found)
         rts
 sbh     byte 0
+plsmc   byte 0                  ; 1: plshow keeps clear of lmcl too (mfirst)
 sfirst  byte 0
 sfound  byte 0
 sbest   byte 0,0,0
@@ -1394,8 +1403,13 @@ prepare lda opt_lines           ; a style: its patch and colours in the
         sta npart
         sta lclaim
         sta chainon
+        sta mlate
         sta modon
         sta muse
+        sta gdraw
+        sta dnp
+        lda #$ff                ; (no picture drawn in: plan's)
+        sta ndraw
         jsr shset               ; what shows: the module, music, or nothing
         bne @s
         clc
@@ -1409,9 +1423,15 @@ prepare lda opt_lines           ; a style: its patch and colours in the
         jmp prfail
 @gm     lda bok                 ; a second module: a chain
         sta chainon
-        lda opt_showl           ; the lines on through it: it must leave
-        beq @gb                 ; the border alone (its header's +27; a
-        jsr lined               ; chain's second too)
+        ldx opt_mst             ; (the tune with the second: the first silent)
+        cpx #2
+        beq @l2
+        lda #0
+@l2     sta mlate
+        lda opt_showl           ; the lines on through it (asked, or the
+        ora opt_cyc             ; cycle's): it must leave the border alone
+        beq @gb                 ; (its header's +27; a chain's second too)
+        jsr lined
         bcc @gb
         lda gbord
         ldx bok
@@ -1661,7 +1681,10 @@ prgame  jsr gclaims             ; lmcl (a chain's second's too)
         bcc @hd
         lda #r_ingame
         jmp prnot
-@hd     lda gppl                ; the header: song, share, music
+@hd     jsr drawq               ; a picture that draws in? (then it starts
+        jsr mfirst              ; the tune itself) the music first? (its
+                                ; player built)
+        lda gppl                ; the header: song, share, music
         sta p1
         lda gpph
         sta p1+1
@@ -1669,6 +1692,8 @@ prgame  jsr gclaims             ; lmcl (a chain's second's too)
         lda #$ff
         ldx muse
         beq @so
+        ldx mlate               ; (the tune with the second: none here)
+        bne @so
         lda ma
 @so     jsr hput
         iny
@@ -1689,23 +1714,66 @@ prgame  jsr gclaims             ; lmcl (a chain's second's too)
         iny
         cpy #25
         bcc @mf
+        lda mlate               ; (the tune with the second: the first's
+        beq @nl                 ; fields as its file has them, hdrmus the
+        ldy #16                 ; tune's, for the second: chhead)
+@ml     lda gorig-16,y
+        jsr hput
+        iny
+        cpy #25
+        bcc @ml
+@nl
         jsr pblocks             ; +26: the program's size in disk blocks
                                 ; (liveblk: what loads while it runs)
         ldy #26
         jsr hput
-        lda gbord               ; +28: the tool's options (-wait, -countdown),
-        and #$0c                ; for a module that keeps them (its +27);
-        beq @pa                 ; the rest of the byte as its file has it
-        ldy #28
-        jsr hget
-        and #$f5
+        ldy #28                 ; +28. Bits 4 and 6 are each tape's own: off
+        jsr hget                ; first (the header stays in the pool: a tape
+        and #$af                ; made before in the session set them, and a
+        pha                     ; module then never started its tune)
+        lda gbord               ; the tool's options (-wait, -waitgame,
+        and #$2c                ; -countdown), for a module that keeps them
+        beq @k                  ; (its +27); the rest of the byte as its
+        pla                     ; file has it
+        and #$d5
         ldx chainon             ; (a chain's first: none of them)
         bne @c1
         ora opt_gopt
-@c1     jsr hput
-@pa     lda muse                ; the parts: the tune, the others, the main
+@c1     pha
+@k      lda mearly              ; bit 4: the tune playing already (the music
+        beq @e                  ; first's player started it), whatever the
+        pla                     ; module keeps
+        ora #$10
+        pha
+@e      lda gdraw               ; a picture drawn in: bit 6 (its screen and
+        beq @d                  ; bitmap load after it starts)
+        pla
+        ora #$40
+        pha
+@d      pla
+        ldy #28
+        jsr hput
+@pb     lda muse                ; the parts: the tune, the others, the main
         beq @o
         jsr tunepart
+        lda mearly              ; (the music first: its player, the boot's
+        beq @o                  ; last part; the module's load while it plays)
+        lda sbase
+        sta t0
+        lda sbase+1
+        sta t1
+        lda #<showbuf
+        sta p1
+        lda #>showbuf
+        sta p1+1
+        lda #<showlen
+        sta t2
+        lda #>showlen
+        sta t3
+        lda #0
+        jsr addpart
+        lda npart
+        sta nboot
 @o      ldx #1
 @op     cpx gnp
         bcs @mn
@@ -1734,7 +1802,8 @@ prgame  jsr gclaims             ; lmcl (a chain's second's too)
         sta t3
         lda #0
         jsr addpart
-@nc     lda #<lmcl              ; the claims: the game's, the tune's
+@nc     jsr drawn               ; (a picture drawn in: its screen and bitmap)
+        lda #<lmcl              ; the claims: the game's, the tune's
         sta lcsrc
         lda #>lmcl
         sta lcsrc+1
@@ -1771,6 +1840,80 @@ prgame  jsr gclaims             ; lmcl (a chain's second's too)
 @x      clc
         rts
 gameplaymax = 3700              ; (c64model.GAME_PLAY_MAX)
+
+; ------------------------------------------------------------
+; mfirst  the music first (opt_mst 0, the default with a tune and a
+; module): the show module plays the tune, the screen off, while the
+; module's parts load, then hands over to it (its +78 to +86: mkcore).
+; With the tune placed (lmus), if the module keeps a tune that plays on
+; (+27 bit 4), leaves the show module its room in the high pool (hplen
+; under showbuf), and plshow finds it a place clear of the loader, the
+; tune and the modules (lmcl), at a share of 25% or more: the module
+; built (showtmp, then showbuf), mearly 1, its entry points in stgent,
+; its share in stgshr. Else mearly 0, and why said
+; ------------------------------------------------------------
+mfirst  lda #0
+        sta mearly
+        sta nboot
+        lda muse
+        beq @x
+        lda opt_mst
+        bne @x
+        lda gdraw               ; (a picture drawn in plays it before its
+        bne @x                  ; picture loads: no player needed)
+        ldx #<tx_mfk            ; (keeps a tune playing on?)
+        ldy #>tx_mfk
+        lda gbord
+        and #$10
+        beq @no
+        ldx #<tx_mfr            ; (room?)
+        ldy #>tx_mfr
+        lda hplen+1
+        cmp #>(showbuf-hpbase)
+        bcs @no
+        jsr mlist
+        lda #1
+        sta plsmc
+        jsr plshow
+        lda #0
+        sta plsmc
+        ldx #<tx_mfr            ; (ldx, ldy: the carry kept)
+        ldy #>tx_mfr
+        bcc @no                 ; (none: c clear)
+        jsr shbuild
+        ldx #<tx_mfr
+        ldy #>tx_mfr
+        bcs @no
+        sta stgshr
+        lda #0                  ; +28: no ending (it hands over)
+        sta showtmp+28
+        ldx #5
+@en     lda showtmp+4,x
+        sta stgent,x
+        dex
+        bpl @en
+        jsr toshow
+        inc mearly
+@x      rts
+@no     txa
+        pha
+        tya
+        pha
+        ldx #<tx_mf
+        ldy #>tx_mf
+        jsr print
+        pla
+        tay
+        pla
+        tax
+        jmp print
+mearly  byte 0                  ; 1: the music first
+nboot   byte 0                  ; ... the parts before the module's: the tune, its player
+stgent  word 0,0,0              ; ... its player's init, frame, stop
+stgshr  byte 0                  ; ... and the loader's share beside it
+tx_mf   text "the music starts with the module: ",0
+tx_mfk  text "it",13,"doesn't keep a tune playing on",13,0
+tx_mfr  text "no",13,"room for its player",13,0
 
 ; pblocks  the program's size in disk blocks: (plen + 2) / 254, rounded
 ; up (250 at most: $0801-$fff9) for a game's header +26 (plan's liveblk
@@ -1814,8 +1957,164 @@ gpart   lda gpal,x
         sta t2
         lda gplh,x
         sta t3
+        lda gdraw
+        bne dpart
+        jmp addpart             ; (a = 0: not colour ram)
+
+; ------------------------------------------------------------
+; a picture drawn in (c64model.plan, slopload.py's draw_split): the show
+; module as a picture (+27 bit 6, +15 not $ff) in VIC bank 3 (+25 0, as
+; PICTURE-LM and picturelm.py make it) starts first, with its code, its
+; colours and its sprites; its screen ($cc00-$cfe7; to $cfff with
+; sprites, their pointers in it) and bitmap ($e000-$ff3f) load after it,
+; as the program does, so it shows them as they come
+; ------------------------------------------------------------
+; drawq  gdraw 1 if the module is such a picture
+drawq   lda gppl
+        sta p1
+        lda gpph
+        sta p1+1
+        ldx #0
+        lda gbord
+        and #$40
+        beq @x
+        ldy #15
+        jsr hget
+        cmp #$ff
+        beq @x
+        ldy #25
+        jsr hget
+        bne @x
+        inx
+@x      stx gdraw
+        rts
+
+; dpart  a part of it: cut at $cc00, $d000, $e000 and $ff40, the pieces
+; in its screen and bitmap kept back (defer), the rest added
+;   in:   as addpart's (t0/t1 address, p1 place, t2/t3 length)
+dpart   lda t2
+        sta drem
+        lda t3
+        sta drem+1
+@next   lda drem
+        ora drem+1
+        bne @go
+        rts
+@go     ldx #0                  ; the first cut above its address (4: none)
+@b      lda t0
+        cmp dbl,x
+        lda t1
+        sbc dbh,x
+        bcc @f
+        inx
+        cpx #4
+        bcc @b
+@f      lda drem                ; the piece: the rest, or to that cut
+        sta t2
+        lda drem+1
+        sta t3
+        cpx #4
+        bcs @w
+        lda dbl,x
+        sec
+        sbc t0
+        sta dcut
+        lda dbh,x
+        sbc t1
+        sta dcut+1
+        lda dcut
+        cmp drem
+        lda dcut+1
+        sbc drem+1
+        bcs @w
+        lda dcut
+        sta t2
+        lda dcut+1
+        sta t3
+@w      lda drem                ; (the rest after it)
+        sec
+        sbc t2
+        sta drem
+        lda drem+1
+        sbc t3
+        sta drem+1
+        txa                     ; an odd cut above: in the screen or bitmap
+        lsr a
+        bcc @now
+        ldx dnp                 ; kept back
+        lda t0
+        sta dal,x
+        lda t1
+        sta dah,x
+        lda t2
+        sta dll,x
+        lda t3
+        sta dlh,x
+        lda p1
+        sta dpl,x
+        lda p1+1
+        sta dph,x
+        inc dnp
+        bne @adv
+@now    lda #0
+        jsr addpart
+@adv    lda t0                  ; on past it
+        clc
+        adc t2
+        sta t0
+        lda t1
+        adc t3
+        sta t1
+        lda p1
+        clc
+        adc t2
+        sta p1
+        lda p1+1
+        adc t3
+        sta p1+1
+        jmp @next
+dbl     byte <$cc00,<$d000,<$e000,<$ff40
+dbh     byte >$cc00,>$d000,>$e000,>$ff40
+
+; drawn  the pieces kept back, after the module's other parts (and a
+; chain's switch), the last kept back first (its screen, then its
+; bitmap: the parts' order is the bitmap's first); ndraw: the first's
+; number (plan's)
+drawn   lda gdraw
+        beq @x
+        lda npart
+        sta ndraw
+@n      ldx dnp
+        beq @x
+        dex
+        stx dnp
+        lda dal,x
+        sta t0
+        lda dah,x
+        sta t1
+        lda dll,x
+        sta t2
+        lda dlh,x
+        sta t3
+        lda dpl,x
+        sta p1
+        lda dph,x
+        sta p1+1
         lda #0
-        jmp addpart
+        jsr addpart
+        jmp @n
+@x      rts
+gdraw   byte 0                  ; 1: the module is a picture that draws in
+ndraw   byte $ff                ; ... the first part loaded after it starts
+dnp     byte 0                  ; the pieces kept back: address, length,
+dal     byte 0,0,0,0            ; place
+dah     byte 0,0,0,0
+dll     byte 0,0,0,0
+dlh     byte 0,0,0,0
+dpl     byte 0,0,0,0
+dph     byte 0,0,0,0
+drem    word 0                  ; (dpart: what is left of the part,
+dcut    word 0                  ; the way to the next cut)
 
 ; toclaim  the list at lcsrc into lclaim
 toclaim lda #<lclaim
@@ -1875,7 +2174,20 @@ prshow  lda #<showok
         lda #r_noroom
         jmp prnot
 @placed jsr mlist               ; (lmus as placed)
-        lda #<showtmp           ; the module, moved
+        jsr shbuild             ; the module there, its share the tune's
+        bcc @sok
+        lda #r_share
+        jmp prnot
+@sok    sta mdshr
+        lda #1                  ; +28: the ending: the fade (always)
+        sta showtmp+28
+        jsr tunepart            ; the parts
+        jmp shpart
+
+; shbuild  the show module at sbase in showtmp, its header for the tune
+; alone: the song, no picture, the music, bank 3, the share (said in a)
+;   out:  c set if the tune leaves too little for loading (shshare)
+shbuild lda #<showtmp           ; the module, moved
         sta p1
         lda #>showtmp
         sta p1+1
@@ -1909,11 +2221,9 @@ prshow  lda #<showok
         inx
         bne @r
 @hd     jsr shshare             ; the share: the tune's
-        bcc @sok
-        lda #r_share
-        jmp prnot
-@sok    sta mdshr
+        bcs @x
         sta showtmp+14
+        pha
         lda ma                  ; the song, no picture, the music, bank 3
         sta showtmp+13
         lda #$ff
@@ -1926,10 +2236,13 @@ prshow  lda #<showok
         bpl @mf
         lda #0
         sta showtmp+25
-        lda #1                  ; +28: the ending: the fade (always)
-        sta showtmp+28
-        jsr tunepart            ; the parts
-        lda sbase
+        pla
+        clc
+@x      rts
+
+; shpart  the show module (showtmp) a part, its claims, to its place in
+; the high pool, the module on the tape (tune alone: the screen off)
+shpart  lda sbase
         sta t0
         lda sbase+1
         sta t1

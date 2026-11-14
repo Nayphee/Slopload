@@ -11,8 +11,9 @@
 ; two, 64 bytes each, 63 will do; a .prg's load address skipped), where
 ; they go (or moved over the picture with the joystick: s), the colours
 ; they flash through (hex digits, one a colour: 1fcb0bcf), frames a
-; colour, multicolour (and its two shared colours), twice as big, and
-; the ending (press space or fire; the music fades). S shows the picture
+; colour, multicolour (and its two shared colours), twice as big, the
+; ending (press space or fire; the music fades), and how it loads (whole,
+; then shown; or drawn in as it loads: +27 bit 6). S shows the picture
 ; and the sprites as they will be, the joystick in port 2 moving them
 ; (fire keeps the place); return asks for the module's name (the
 ; picture's, ending .lm) and writes it; the settings stay for the next;
@@ -21,11 +22,13 @@
 ; The file (tools/picturelm.py has the why of each byte): VIC bank 3,
 ; two parts. $c000-$cfe7: the module (pl_lm, assembled at $c000), its
 ; scratch (zeros), a Koala picture's colours (at +76: the module copies
-; them into colour RAM as it starts), zeros, the screen at $cc00.
+; them into colour RAM as it starts), zeros, the screen at $cc00; with
+; sprites to $cfff, their pointers ($cff8, $cff9) in it.
 ; $e000: the bitmap, then the sprites ($ff40 on). The header: +12 the
 ; jitter (48; 8 a sprite on a line more), +13 no song, +14 the share
-; (64), +15 the background, +25 the bank, +28 the ending and hires,
-; +29 to +75 the sprites (as slopload.py's load_sprites makes them).
+; (64), +15 the background, +25 the bank, +27 bit 6 drawn in, +28 the
+; ending and hires, +29 to +75 the sprites (as slopload.py's
+; load_sprites makes them).
 ;
 ; Memory: the program $0801 on; the sprites shown at $4000 and $4040,
 ; the screen at $4c00, the bitmap at $6000 (VIC bank 1, for s); the
@@ -95,12 +98,6 @@ dsbuf   byte 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
 prgdev  byte 8                  ; the picture's drive
 prglen  byte 0                  ; ... its name
 prgname byte 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
-paddr   word 0                  ; (unused here)
-eof     byte 0
-tapdev  byte 0                  ; (unused here)
-tapfnl  byte 0
-tapfname byte 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
-tapn    byte 0,0,0
 wold    byte $2e,$4b,$4f,$41    ; ".koa": the picture's name less it, + ".lm"
 wnew    byte 3,$2e,$4c,$4d
 
@@ -126,6 +123,7 @@ smca    byte 0
 smcb    byte 0
 sbig    byte 0                  ; twice as wide and tall (1)
 ewait   byte 0                  ; the ending: space or fire (1)
+edraw   byte 0                  ; how it loads: drawn in (1), else whole
 irow    byte 0                  ; the menu: the line's row
 usedc   byte 5                  ; ... its value's colour
 shead   byte 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0 ; mkhead: +29 to +75
@@ -161,12 +159,11 @@ main    lda #<rtiv              ; restore: nothing (the nmi vector)
 
 ; ------------------------------------------------------------
 ; menu  every setting on a line of its own (1-8), changed by its number
-; at any time: its name in reverse on row ttlrow and its questions
-; under it; s shows the picture and moves the sprites, return writes
+; at any time, as SlopLoad 64's: the screen cleared, its name in a light
+; blue bar on the top row and its questions under it; s shows the picture and moves the sprites, return writes
 ; the module (the settings stay), q quits. An action returns c set when
 ; it said something: "press any key" first, then the menu again.
 ; ------------------------------------------------------------
-ttlrow  = 14
 menu    ldx #$ff
         txs
         jsr clrchn
@@ -177,16 +174,16 @@ menu    ldx #$ff
         beq @k
         cmp #13
         bne @q
-        lda #9                  ; return: write the module
+        lda #10                 ; return: write the module
         jsr ptitle
         jsr awrite
         jmp @any
 @q      cmp #'@'                ; @: the disk, its files and commands
         bne @qq
-        lda #11
+        lda #12
         jsr ptitle
-        jsr adisk
-        jmp @any
+        jsr adisk               ; (it ends on return alone: the menu again)
+        jmp menu
 @qq     cmp #'q'
         bne @s
         jsr cmdclose
@@ -196,16 +193,16 @@ menu    ldx #$ff
         jmp quit
 @s      cmp #'s'
         bne @n
-        lda #10                 ; s: show it
+        lda #11                 ; s: show it
         jsr ptitle
         jsr ashow
         bcc menu
         jmp @any
 @n      cmp #'1'
         bcc @k
-        cmp #'9'
+        cmp #'9'+1
         bcs @k
-        and #15                 ; 1-8: its line
+        and #15                 ; 1-9: its line
         pha
         jsr ptitle
         pla
@@ -219,13 +216,18 @@ menu    ldx #$ff
         bcc menu
 @any    jsr anykey
         jmp menu
-acts    word apic,aspr,apos,acols,aspeed,amc,abig,aend
+acts    word apic,aspr,apos,acols,aspeed,amc,abig,aend,adraw
 
 quit    jsr print
         lda #$37
         sta $01
+        sei                     ; (RESTOR writes $0314/$0315 a byte at a time)
         jsr $ff8a               ; the KERNAL's vectors again (RESTORE: not
-        jmp ($a002)             ; this program's rti); BASIC's warm start
+        jsr $e453               ; this program's rti), BASIC's own, and its
+        jsr $e3bf               ; zero page: this program kept its pointers
+        jsr $a644               ; where BASIC's are ($2B on), and a LOAD after
+        cli                     ; it went wherever they pointed. NEW, and
+        jmp ($a002)             ; BASIC's warm start
 rtiv    rti
 
 ; look  the screen cleared, its colours and character set the tool's
@@ -356,7 +358,16 @@ mdraw   jsr look
         ldx #<tx_pwait
         ldy #>tx_pwait
 @e1     jsr print
-        ldx #12                 ; the keys
+        lda #9                  ; 9 how it loads
+        jsr item0
+        ldx #<tx_whole
+        ldy #>tx_whole
+        lda edraw
+        beq @d1
+        ldx #<tx_drawn
+        ldy #>tx_drawn
+@d1     jsr print
+        ldx #13                 ; the keys
         ldy #0
         clc
         jsr plot
@@ -400,8 +411,8 @@ item    stx irow
         lda #5                  ; (white for the next)
         sta usedc
         rts
-lablo   byte <tl1,<tl2,<tl3,<tl4,<tl5,<tl6,<tl7,<tl8,<tl9,<tl10,<tl11
-labhi   byte >tl1,>tl2,>tl3,>tl4,>tl5,>tl6,>tl7,>tl8,>tl9,>tl10,>tl11
+lablo   byte <tl1,<tl2,<tl3,<tl4,<tl5,<tl6,<tl7,<tl8,<tl9,<tl10,<tl11,<tl12
+labhi   byte >tl1,>tl2,>tl3,>tl4,>tl5,>tl6,>tl7,>tl8,>tl9,>tl10,>tl11,>tl12
 
 ; used  the next value grey with no sprites (it doesn't count)
 used    lda #5
@@ -433,18 +444,14 @@ prfile  stx p1
         jmp @c
 @x      rts
 
-; ptitle  line a's name (9: write it, 10: show it) in reverse on row
-; ttlrow, the cursor under it
+; ptitle  the screen cleared, line a's name (10: write it, 11: show it,
+; 12: @ disk) in a light blue bar on the top row, the cursor under it
 ptitle  pha
-        ldx #ttlrow
-        ldy #0
-        clc
-        jsr plot
         ldx #<tx_ttl
         ldy #>tx_ttl
         jsr print
         pla
-        cmp #9
+        cmp #10
         bcs @w
         pha
         ora #'0'
@@ -517,19 +524,19 @@ asknum  sta t5
         clc
 @x      rts
 
-; askyn  the question at x/y: a = 1 for y, 0 for anything else
-askyn   jsr print
-        lda #1
-        jsr readline
-        ldx #0
-        lda inlen
-        beq @n
-        lda inbuf
-        cmp #'y'
-        bne @n
-        inx
-@n      txa
-        rts
+; ask12  a choice of two, the question at x/y (it lists them as 1 and
+; 2), the default a (0 or 1): a = 0 or 1 (the default if neither)
+ask12   sta t4                  ; (t4: readline takes t6)
+        clc
+        adc #1
+        jsr asknum
+        bcs @d
+        sec
+        sbc #1
+        cmp #2
+        bcc @x
+@d      lda t4
+@x      rts
 
 ; askfile  the drive (a: its default; x/y the question) and a file's
 ; name into fnbuf (fnl its length; 0: return alone)
@@ -569,14 +576,13 @@ askfile stx p2
         bne @in
         jsr dcmd
         jmp @nm
-@none   pla
-        lda #1
+@none   lda #1
         sta fnl
         lda #'-'
         sta fnbuf
-        lda fdrv
-        clc
-        rts
+        pla                     ; (the default it was asked with, not fdrv: the
+        clc                     ; last drive typed at any question, which then
+        rts                     ; became the picture's, and the .lm's)
 @in     ldx inlen
         stx fnl
 @c      dex
@@ -1105,9 +1111,10 @@ aspeed  jsr needspr
 ; amc  6: multicolour: y and its shared colours, or not
 amc     jsr needspr
         bcs @x
+        lda smc
         ldx #<q_mc
         ldy #>q_mc
-        jsr askyn
+        jsr ask12
         sta smc
         beq @k
         lda smca
@@ -1130,18 +1137,29 @@ amc     jsr needspr
 ; abig  7: twice as wide and tall, or not
 abig    jsr needspr
         bcs @x
+        lda sbig
         ldx #<q_big
         ldy #>q_big
-        jsr askyn
+        jsr ask12
         sta sbig
         clc
 @x      rts
 
 ; aend  8: the ending: space or fire, the music faded
-aend    ldx #<q_wait
+aend    lda ewait
+        ldx #<q_wait
         ldy #>q_wait
-        jsr askyn
+        jsr ask12
         sta ewait
+        clc
+        rts
+
+; adraw  9: how it loads: whole, then shown, or drawn in as it loads
+adraw   lda edraw
+        ldx #<q_draw
+        ldy #>q_draw
+        jsr ask12
+        sta edraw
         clc
         rts
 
@@ -1353,6 +1371,12 @@ mkmod   ldx #77
         beq @h
         ora #4
 @h      sta lmhead+28
+        lda lmhead+27           ; +27 bit 6: drawn in
+        and #$bf
+        ldx edraw
+        beq @dw
+        ora #$40
+@dw     sta lmhead+27
         lda nspr
         beq @ns
         jsr mkhead
@@ -1401,10 +1425,14 @@ awrite  jsr needpic
         sta p2hd
         lda #>lmbase
         sta p2hd+1
-        lda #<(lmscr+1000-lmbase)
-        sta p2hd+2
-        lda #>(lmscr+1000-lmbase)
-        sta p2hd+3
+        ldx #<(lmscr+1000-lmbase)
+        ldy #>(lmscr+1000-lmbase)
+        lda nspr                ; with sprites to $cfff: the screen's 24
+        beq @ns                 ; bytes more, their pointers among them
+        ldx #<(lmscr+1024-lmbase)
+        ldy #>(lmscr+1024-lmbase)
+@ns     stx p2hd+2
+        sty p2hd+3
         jsr wr4
         lda #78                 ; the header, made
         sta cnt
@@ -1443,7 +1471,15 @@ awrite  jsr needpic
         lda kscr
         ldx kscr+1
         jsr w1000
-        lda #<lmbit             ; the second part: $e000, the bitmap and
+        lda nspr                ; with sprites the screen's page to its end:
+        beq @p2                 ; the pointers the module's own then (a
+        lda #24                 ; program's bytes there load after it)
+        sta cnt
+        ldy #0
+        lda #<sptail
+        ldx #>sptail
+        jsr wrblk
+@p2     lda #<lmbit             ; the second part: $e000, the bitmap and
         sta p2hd                ; the sprites
         lda #>lmbit
         sta p2hd+1
@@ -1481,6 +1517,10 @@ awrite  jsr needpic
         jmp say
 @x      rts
 p2hd    byte 0,0,0,0            ; a part's address and length
+; after a screen with sprites ($cfe8-$cfff): the VIC's pointers at
+; screen + $3f8, the two sprites' ($ff40, $ff80), as slopload.py's
+; SPRITE_TAIL
+sptail  byte 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,$fd,$fe,0,0,0,0,0,0
 
 ; wr4  p2hd's 4 bytes to the output
 wr4     lda #4
@@ -1784,22 +1824,21 @@ adisk   lda ddev
         bcs @x
         sta ddev
         jsr dcmd
-@x      sec                     ; (said: a key, then the menu)
-        rts
+@x      rts
 
 ; ---- texts ----
-tl1     text "picture     ",0      ; (12 each, so that the values line up at column 14:
-tl2     text "sprites     ",0      ;   the user, 2026-11-06, "the PICTURE-LM menu looks like a
-tl3     text " where      ",0      ;   mess": names and values ran together; the sprites'
-tl4     text " colours    ",0      ;   own lines set in under them)
-tl5     text " speed      ",0
-tl6     text " mode       ",0
-tl7     text " size       ",0
-tl8     text "ending      ",0
-tl9     text "write the module",0
-tl10    text "show it",0
-tl11    text "@ disk",0
-tx_head text "           ",159,"*** ",5,"picture-lm",159," ***",13,151,"   a picture to a loader module",30,0
+tl1     text "picture   ",0        ; (10 each: the values at column 12, as in every
+tl2     text "sprites   ",0        ;   tool of the family. The user, 2026-11-06, "the
+tl3     text " where    ",0        ;   PICTURE-LM menu looks like a mess": names and
+tl4     text " colours  ",0        ;   values ran together; the sprites' own lines set in
+tl5     text " speed    ",0        ;   under them. 2026-11-14: "neat and tidy, with a
+tl6     text " mode     ",0        ;   coherent style between them")
+tl7     text " size     ",0
+tl8     text "ending    ",0
+tl9     text "loading   ",0
+tl10    text "write the module",0
+tl11    text "show it",0
+tl12    text "@ disk",0
 tx_bye  text "bye.",13,0
 tx_koala text " (multi)",0
 tx_hires text " (hires)",0
@@ -1813,8 +1852,10 @@ tx_norm text "normal",0
 tx_big  text "twice as big",0
 tx_atonce text "the program starts at once",0
 tx_pwait text "wait for space or fire",0
-tx_mkeys text 155,"1-8: change  s: show  @: disk  q: quit",13,"return: write the module",30,0
-tx_ttl  text 154,18," ",0       ; light blue, reverse
+tx_mkeys text 155,"1-9: change  s: show  @: disk  q: quit",13,"return: write the module",30,0
+tx_whole text "whole, then shown",0
+tx_drawn text "drawn in as it loads",0
+tx_ttl  text 147,154,18," ",0   ; cleared; light blue, reverse
 tx_ttle text 146,30,13,0        ; (off, green, the next row)
 tx_anyk text 155,"press any key",30,0
 tx_needp text "choose a picture first (1)",13,0
@@ -1823,34 +1864,36 @@ tx_ask  text "]? ",0
 tx_reading text "reading it...",13,0
 tx_long text "too long for one",13,0
 tx_notpic text "not a picture it knows. ",0
-tx_fmts text "multicolour: koala (and interpaint, face",13
-        text "painter, run paint), advanced art studio,",13
-        text "blazing paddles, artist 64, image",13
-        text "system, saracen paint, vidcom 64,",13
-        text "dolphin ed, drazpaint, micro illustrator,",13
-        text "cdu-paint, paint magic. hires: art",13
-        text "studio, doodle, image system, hi-eddi.",13
-        text "unpacked files, as their tools save them",13,0
+tx_fmts text "multicolour: koala (and interpaint,",13     ; (no row to column 40: a
+        text "face painter, run paint), advanced art",13 ;   full one leaves a blank row
+        text "studio, blazing paddles, artist 64,",13    ;   after it, and one more wraps)
+        text "image system, saracen paint, vidcom 64,",13
+        text "dolphin ed, drazpaint, micro",13
+        text "illustrator, cdu-paint, paint magic.",13
+        text "hires: art studio, doodle, image",13
+        text "system, hi-eddi.",13
+        text "unpacked, as their tools save them",13,0
 tx_isa  text "a picture in ",0
-tx_notspr text "not one or two sprites (64 bytes each,",13,"63 will do, a .prg's load address first)",13,0
+tx_notspr text "not one or two sprites (64 bytes each;",13,"63 will do, after a .prg's address)",13,0
 tx_badcol text "colours are hex digits: 0-9, a-f",13,0
 tx_off  text "they run off the picture: move them (3)",13,0
-tx_after text "choose it in slopload 64 (3: the module)",13,0
+tx_after text "choose it in slopload 64: 3, the module",13,0
 q_pdrive text "drive with the picture [",0
 q_ddrive text "drive [",0
 q_sdrive text "drive with the sprites [",0
-tx_sprf text "one or two sprites, 64 bytes each (63",13,"will do; a .prg's load address skipped):",13
+tx_sprf text "one or two sprites, 64 bytes each (63",13,"will do; a .prg's address is skipped):",13
         text "cassette.spr on this disk is one",13,0
-q_file  text "its file name ($: files, @: disk, return:",13,"keep it, -: none)? ",0
+q_file  text "its file name ($: files, @: disk,",13,"return: keep it, -: none)? ",0
 q_px    text "x, 0-319 (its left on the picture)? ",0
 q_py    text "y, 0-199 [",0
 q_cols  text "their colours, hex digits (1-32 of",13,"them: more flash)? ",0
 q_spd   text "frames a colour [",0
-q_mc    text "multicolour? y/n ",0
+q_mc    text "the sprites:",13,"  1 hires",13,"  2 multicolour",13,"which [",0
 q_mca   text "its shared colour a (01) [",0
 q_mcb   text "its shared colour b (11) [",0
-q_big   text "twice as wide and tall? y/n ",0
-q_wait  text "once it's in, wait for space or fire? y/n ",0
+q_big   text "their size:",13,"  1 normal",13,"  2 twice as wide and tall",13,"which [",0
+q_wait  text "once the program is in:",13,"  1 it starts at once",13,"  2 wait for space or fire",13,"which [",0
+q_draw  text "the picture, as it loads:",13,"  1 whole, then shown",13,"  2 drawn in as it loads (it starts",13,"    first: a few seconds slower)",13,"which [",0
 q_out   text "the module's name [",0
 
         incasm "piclm.asm"      ; the module (c64build.py): pl_lm, lmlen, lmclaim

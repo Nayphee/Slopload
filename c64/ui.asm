@@ -3,17 +3,19 @@
 ; changed by its number at any time; return masters the tape (and the
 ; settings stay for the next one)
 ;
-; The screen is cleared and the menu drawn whole each time (rows 0-12:
-; the title, the machine, lines 1-8 in a row, the keys). A number
-; puts that line's name in reverse on row 15 and its questions under
-; it; when it is done, "press any key" and the menu again. What shows
+; The screen is cleared and the menu drawn whole each time (rows 0-13
+; or so: the title and the release, the machine, lines 1-9 in a row, a
+; module's options on the next row when they don't fit on its own, the
+; keys). A number clears the screen, puts that line's name in reverse
+; (light blue) on the top row and its questions under it; when it is
+; done, "press any key" and the menu again (after @, return alone goes
+; straight back). What shows
 ; while the program loads follows from lines 3 and 4: the module (with
 ; the tune, if any), the tune alone on a blank screen, or neither (the
 ; screen off). A picture is a module (PICTURE-LM makes one).
 ; ------------------------------------------------------------
 pok     byte 0                  ; a program read
 tnset   byte 0                  ; the name on tape typed (else the program's)
-ttlrow  = 15                    ; the line being changed: its title's row
 
 ; ------------------------------------------------------------
 ; ui  the menu, until return with what it needs
@@ -32,8 +34,8 @@ ui      jsr mdraw
         bne @nd
         lda #11
         jsr ptitle
-        jsr adisk
-        jmp @j+3
+        jsr adisk               ; (it ends on return alone: the menu again)
+        jmp ui
 @nd     cmp #'1'
         bcc @k
         cmp #'9'+1
@@ -92,14 +94,10 @@ anykey  sec                     ; (on a new line, unless at its start)
 tx_anyk text 155,"press any key",5,0
 
 ; ------------------------------------------------------------
-; ptitle  line a's name (10: mastering the tape) in reverse on row ttlrow,
-; the cursor under it
+; ptitle  the screen cleared, line a's name (10: mastering the tape,
+; 11: @ disk) in reverse on its top row, the cursor under it
 ; ------------------------------------------------------------
 ptitle  pha
-        ldx #ttlrow
-        ldy #0
-        clc
-        jsr plot
         ldx #<tx_ttl
         ldy #>tx_ttl
         jsr print
@@ -134,13 +132,13 @@ ptitle  pha
 @e      ldx #<tx_ttle
         ldy #>tx_ttle
         jmp print
-tx_ttl  text 154,18," ",0       ; light blue, reverse
+tx_ttl  text 147,154,18," ",0   ; cleared; light blue, reverse
 tx_ttle text 146,5,13,0         ; (off, white, the next row)
 tx_write text "master the tape",0
 tx_disk text "@ disk",0
 
 ; ------------------------------------------------------------
-; mdraw  the screen cleared, the menu (rows 0-12)
+; mdraw  the screen cleared, the menu (rows 0-13 or so)
 ; ------------------------------------------------------------
 mdraw   ldx #<tx_head
         ldy #>tx_head
@@ -215,6 +213,21 @@ mdraw   ldx #<tx_head
         ldx #<mnlen
         ldy #>mnlen
         jsr prfile
+        lda gok                 ; (with a module: +module, +second when
+        beq @m2                 ; the tune starts with one, not before)
+        ldx opt_mst
+        beq @m2
+        dex
+        beq @mm
+        lda bok
+        beq @mm                 ; (the second gone: with the first)
+        ldx #<tx_plate
+        ldy #>tx_plate
+        bne @mt
+@mm     ldx #<tx_pmod
+        ldy #>tx_pmod
+@mt     lda #31
+        jsr prroom
         jmp @m2
 @m0     jsr none
 @m2     lda #6                  ; 6 speed
@@ -271,34 +284,58 @@ mdraw   ldx #<tx_head
         ldx #<tx_onego
         ldy #>tx_onego
         jsr print
-@kp     ldx #12                 ; the keys
+@kp     ldx irow                ; the keys, a row on
+        inx
+        inx
         ldy #0
         clc
         jsr plot
         ldx #<tx_keys
         ldy #>tx_keys
         jmp print
-tx_head text 147,5,"            ",159,"*** ",5,"slopload",159," ***",13,152,0
 tx_sdef text " (the default)",0
 tx_sys  text " sys ",0
 tx_cass text "cassette",0
 tx_onego text ", in one go",0
 tx_keys text 155,"1-9: change @: disk return: master tape",5,0
 
-; propts  the module's options as the menu shows them: +wait, +count
+; propts  the module's options as the menu shows them: +space or +end
+; (its ending), +blocks (the count); one that doesn't fit on the row goes
+; on the next, under the value
 propts  lda opt_gopt
         and #2
-        beq @c
+        beq @e
         ldx #<tx_pwait
         ldy #>tx_pwait
-        jsr print
+        lda #33
+        bne @p
+@e      lda opt_gopt
+        and #$20
+        beq @c
+        ldx #<tx_pend
+        ldy #>tx_pend
+        lda #35
+@p      jsr prroom
 @c      lda opt_gopt
         and #8
-        beq @x
+        beq @r
         ldx #<tx_pcnt
         ldy #>tx_pcnt
+        lda #32
+        jmp prroom
+@r      rts
+prroom  stx p3                  ; the text at x/y, if the cursor is at
+        sty p3+1                ; column a or before; else on the next row
+        jsr room
+        bcc @p
+        inc irow
+        ldx irow
+        ldy #11                 ; (its space at 11: the value's column 12)
+        clc
+        jsr plot
+@p      ldx p3
+        ldy p3+1
         jmp print
-@x      rts
 
 ; item  line a's number and name (green) on row x, the value white next;
 ; item0: on the row after the last
@@ -538,7 +575,7 @@ askst   ldx #<q_start
 @a      sta opt_start
         stx opt_start+1
 @x      rts
-q_start text "it isn't at $0801: start with sys [",0
+q_start text "not at $0801: its start, sys [",0
 q_drive text "drive with the program [",0
 q_prog  text "its file name? ",0
 
@@ -663,39 +700,112 @@ asecond lda gok
         sta gok
 
 ; askopt  the tool's options the module that ends the load keeps (its
-; +27 bits 2, 3: -wait, -countdown): asked, else off
+; +27 bits 2, 5, 3: -wait, -waitgame, -countdown): asked, else off.
+; Once the program is in: 1 it starts at once, 2 on SPACE (bit 1), 3 at
+; the game's end (bit 5); then the number by the loading bar: 1 the
+; percent, 2 the blocks still to load (bit 3)
 askopt  lda gbord
         ldx bok
         beq @kb
         lda bbord
 @kb     sta kbord
-        lda #0                  ; the tool's options it keeps (its +27 bits
-        sta opt_gopt            ; 2, 3): asked, else off
+        lda #0                  ; (asked, else off)
+        sta opt_gopt
+        lda kbord
+        and #$24
+        beq @nw
+        ldx #<q_gend
+        ldy #>q_gend
+        jsr print
+        lda kbord
+        and #4
+        beq @n2
+        ldx #<q_gend2
+        ldy #>q_gend2
+        jsr print
+@n2     lda kbord
+        and #$20
+        beq @n3
+        ldx #<q_gend3
+        ldy #>q_gend3
+        jsr print
+@n3     lda #1
+        ldx #<q_which
+        ldy #>q_which
+        jsr asknum
+        bcs @nw
+        cmp #2                  ; 2: space (bit 1), if it keeps it (+27
+        bne @e3                 ; bit 2)
         lda kbord
         and #4
         beq @nw
-        ldx #<q_gwait
-        ldy #>q_gwait
-        jsr ynq
-        asl a                   ; y: bit 1 (-wait)
-        sta opt_gopt
+        lda #2
+        bne @es
+@e3     cmp #3                  ; 3: the game's end (bit 5), if it keeps
+        bne @nw                 ; it (+27 bit 5)
+        lda kbord
+        and #$20
+        beq @nw
+@es     sta opt_gopt
 @nw     lda kbord
         and #8
         beq @x
         ldx #<q_gcnt
         ldy #>q_gcnt
-        jsr ynq
-        beq @x
+        lda #1
+        jsr asknum
+        bcs @x
+        cmp #2
+        bne @x
         lda opt_gopt
-        ora #8                  ; y: bit 3 (-countdown)
+        ora #8                  ; 2: bit 3 (-countdown)
         sta opt_gopt
+@x      jmp askms
+
+; askms  with a module and a tune: when the tune starts: 1 before the
+; modules load (the default: the show module plays it while they do), 2
+; with the first module, 3 with the second (a chain's: the first silent)
+askms   lda gok
+        beq @x
+        lda mok
+        cmp #1
+        bne @x
+        ldx #<q_late
+        ldy #>q_late
+        jsr print
+        lda bok
+        beq @n3
+        ldx #<q_late3
+        ldy #>q_late3
+        jsr print
+@n3     lda opt_mst
+        clc
+        adc #1
+        ldx #<q_which
+        ldy #>q_which
+        jsr asknum
+        bcs @x
+        sbc #0                  ; (c clear: 1-3 to 0-2)
+        cmp #3
+        bcs @x
+        cmp #2
+        bne @s
+        ldx bok                 ; (3 only with a second)
+        beq @x
+@s      sta opt_mst
 @x      rts
+q_late  text 13,"the music starts:",13,"  1 before the modules load",13,"  2 with the first module",13,0
+q_late3 text "  3 with the second module",13,0
 sfx_lm  byte 3,$2e,$4c,$4d,0    ; ".lm"
 tx_mod0 text "a .lm (pictures: picture-lm); 0: none",13,0
 tx_gok  text "a module, parts at ",0
 tx_first text "choose a module first (3)",13,0
-q_gwait text "once loaded, wait for space or the game's",13,"end? y/n [n] ",0
-q_gcnt  text "count the blocks down? y/n [n] ",0
+q_gend  text "once the program is in, it starts:",13,"  1 at once",13,0
+q_gend2 text "  2 when space is pressed",13,0
+q_gend3 text "  3 when the game ends",13,0
+q_which text "which [",0
+q_gcnt  text 13,"the number by the module's loading bar:",13,"  1 the percent loaded",13
+        text "  2 the blocks still to load",13,"which [",0
 tx_reading text "reading it...",13,0
 
 ; 5  the music: a .slm (0: none); a .sid is refused: SID-SLM makes one
@@ -735,7 +845,8 @@ amusic  ldx #<tx_mus0
         cpx #32
         bcc @mt
 @mte    lda #13
-        jmp chrout              ; (it fades out at the end, as every module's tune)
+        jsr chrout              ; (it fades out at the end, as every module's tune)
+        jmp askms
 @x      rts
 @r      jmp prwhyr
 ; prwhyr  why the tune was refused, in red, and a new line
@@ -884,7 +995,7 @@ aout    lda #1
         lda xkind
         sta xmem
 @x      rts
-q_out   text "write to: 1 cassette  2 .tap file [",0
+q_out   text "to: 1 cassette  2 a .tap file [",0
 q_tdrive text "drive for the .tap file [",0
 q_tfile text ".tap file [name on tape.tap]? ",0
 tx_dottap text ".tap"
@@ -965,8 +1076,10 @@ q_own   text "your own, 1-12 of 0-15 [",0
 ; colours' first), 8 a colour a block (-stripes block); its value (and,
 ; ora, eor); then the cycle, where it goes, and the lines on through the
 ; module or the music
-aeff    ldx #0                  ; the effects: number and name
-@l      stx t2
+aeff    ldx #0                  ; the effects, one a row: number, name and
+@l      stx t2                  ; a few words (column 13)
+        lda #' '
+        jsr chrout
         txa
         clc
         adc #1
@@ -979,14 +1092,22 @@ aeff    ldx #0                  ; the effects: number and name
         ldy effnhi,x
         tax
         jsr print
-        lda #' '
+        sec
+        jsr plot
+        ldy #13
+        clc
+        jsr plot
+        ldx t2
+        lda effdlo,x
+        ldy effdhi,x
+        tax
+        jsr print
+        lda #13
         jsr chrout
         ldx t2
         inx
         cpx #neff
         bcc @l
-        lda #13
-        jsr chrout
         lda opt_eff
         clc
         adc #1
@@ -1006,22 +1127,33 @@ aeff    ldx #0                  ; the effects: number and name
         bcs @q                  ; (standard, block: no value)
         lda fxval,x
         beq @q
-        lda opt_fxn
-        ldx #<q_fxn
+        lda fxcof,x             ; (line: its value is the line's colour)
+        beq @v
+        ldx #<q_fxl
+        ldy #>q_fxl
+        bne @a                  ; (always)
+@v      ldx #<q_fxn
         ldy #>q_fxn
+@a      lda opt_fxn
         jsr asknum
         bcs @q
         cmp #16
         bcs @q
         sta opt_fxn
 @q      jsr lnset
-        jsr cycok               ; the cycle, where it goes
+        jsr cycok               ; the cycle, where it goes (line: a block)
         bcc @l2
+        jsr isline
         ldx #<q_cyc
         ldy #>q_cyc
-        jsr ynq
+        bcc @cq
+        ldx #<q_cycb
+        ldy #>q_cycb
+@cq     jsr ynq
         sta opt_cyc
-@l2     jsr lined               ; bars (or the cycle): during the module too?
+@l2     lda opt_cyc             ; bars: during the module too? (the cycle
+        bne @x                  ; keeps them on: not asked)
+        jsr lined
         bcc @x
         ldx #<q_showl
         ldy #>q_showl
@@ -1030,8 +1162,23 @@ aeff    ldx #0                  ; the effects: number and name
 @x      rts
 q_fx    text "effect [",0
 q_fxn   text "its value 0-15 [",0
+q_fxl   text "the line's colour 0-15 [",0
 q_cyc   text "a colour on each page loaded? y/n [n] ",0
-q_showl text "bars during the module or music? y/n [n] ",0
+q_cycb  text "the border a colour on each block?",13,"y/n [n] ",0
+
+; isline  c set for the line effect (its border's colour in its bytes)
+isline  lda opt_lines
+        cmp #st_fx
+        bne @n
+        ldx opt_fx
+        lda fxcof,x
+        beq @n
+        sec
+        rts
+@n      clc
+        rts
+q_showl text "keep the loading bars in the border",13,"while the module or music plays? (n: a",13
+        text "plain border; music plays either way)",13,"y/n [n] ",0
 
 ; lnset  opt_lines (and opt_fcol, opt_fx, opt_fxb) from the colours
 ; (opt_pal, ownl) and the effect (opt_eff), as tools/c64model.py's
@@ -1194,8 +1341,11 @@ ynq     jsr print
         rts
 tx_pshow text " +during",0
 tx_pcyc text " +cycle",0
-tx_pwait text " +wait",0
-tx_pcnt text " +count",0
+tx_pwait text " +space",0
+tx_pend text " +end",0
+tx_plate text " +second",0
+tx_pmod text " +module",0
+tx_pcnt text " +blocks",0
 
 ; @  a drive's directory and its commands (the command channel), until
 ; return alone

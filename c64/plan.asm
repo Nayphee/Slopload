@@ -31,8 +31,13 @@ opt_showl byte 0                ; 1: the lines on through the module or show
 opt_cyc byte 0                  ; 1: the border a colour on each page (-cycle: an
                                 ; effect, or black or one colour as the plain one)
 opt_gopt byte 0                 ; a module's header +28: bit 1 SPACE alone at the end
-                                ; (-wait), bit 3 the blocks counted down (-countdown);
-                                ; asked only when the module keeps them (+27 bits 2, 3)
+                                ; (-wait), bit 5 the game's end (-waitgame), bit 3 the
+                                ; blocks counted down (-countdown); asked only when the
+                                ; module keeps them (+27 bits 2, 5, 3)
+opt_mst byte 0                  ; the tune starts: 0 before the modules load (the
+                                ; show module plays it first: -musicstart before,
+                                ; the default), 1 with the first module, 2 with a
+                                ; chain's second (the first silent)
 prgdev  byte 8
 tapdev  byte 8
 prglen  byte 0                  ; the program's file name
@@ -54,32 +59,30 @@ tapn    byte 0,0,0              ; pulses on the whole tape
 totlive word 0
 done    word 0
 npt     byte 0                  ; boundary points (2 + 2 x maxclaim)
-ptl     byte 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
-        byte 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
-pth     byte 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
-        byte 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
+ptl     byte 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0     ; (54)
+        byte 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
+pth     byte 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
+        byte 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
 
 ; ------------------------------------------------------------
 ; plan  the blocks, in tape order (bal.. arrays, nblk)
 ;   out:  c set if there are too many (said)
 ; ------------------------------------------------------------
-plan    lda opt_cyc             ; the cycle with a module or show: only with
-        beq @cy                 ; the lines on through it (the border is
-        jsr fxon                ; theirs otherwise)
-        bcc @cy
-        lda modon
-        beq @cy
-        jsr showl
-        bcs @cy
-        ldx #<tx_cycshow
-        ldy #>tx_cycshow
-        jsr print
-        sec
-        rts
-@cy     lda #0
+plan    lda #0
         sta nblk
+        sta nbootb
         sta t6                  ; the module's parts (prepare's), in order
 @mp     lda t6
+        cmp nboot               ; (the music first: the blocks before the
+        bne @nb                 ; module's)
+        lda nblk
+        sta nbootb
+@nb     lda t6
+        cmp ndraw               ; (a picture drawn in: the blocks after
+        bne @nd                 ; it starts)
+        lda nblk
+        sta ndrawb
+@nd     lda t6
         cmp npart
         bcs @me
         tax
@@ -104,7 +107,30 @@ plan    lda opt_cyc             ; the cycle with a module or show: only with
 @me     lda npart               ; its last block: the module is in
         beq @prog
         ldx nblk
-        lda #f_gameready
+        stx nhand
+        lda mearly              ; (the music first: the tune and its player
+        beq @dr                 ; start it; the module's parts after them
+        ldx nbootb              ; load while it plays, the screen off: set
+@st     lda #5                  ; 5, the hand-over when they're in: nhand)
+        sta bset,x
+        inx
+        cpx nblk
+        bcc @st
+        ldx nbootb
+        bne @gr
+@dr     lda gdraw               ; (a picture drawn in: it starts before its
+        beq @gr                 ; screen and bitmap, which load as the
+        lda chainon             ; program does: set 1, a chain's first's 3)
+        asl a
+        ora #1
+        ldx ndrawb
+@ds     cpx nblk
+        bcs @de
+        sta bset,x
+        inx
+        bne @ds
+@de     ldx ndrawb
+@gr     lda #f_gameready
         sta bfl-1,x
         lda chainon             ; a chain: the second module's blocks
         beq @prog
@@ -157,8 +183,10 @@ plan    lda opt_cyc             ; the cycle with a module or show: only with
         clc
 @x      rts
 
-tx_cycshow text "the border cycle needs the bars during",13,"the module or music (8: y)",13,0
-tx_bnone text "the program loads where the modules are:",13,"the second would show for no time",13,0
+tx_bnone text "the program loads where the modules",13,"are: the second would show for no time",13,0
+nbootb  byte 0                  ; the music first: the boot's blocks (the tune, its player)
+ndrawb  byte 0                  ; a picture drawn in: its first block loaded after it starts
+nhand   byte 0                  ; ... and the module's after them: its player hands over
 
 ; liveblk  a game's header +26: the disk blocks its counter counts down,
 ; those that load while it runs (all the program's, unless some of it
@@ -597,7 +625,25 @@ mkcore  jsr corestd              ; (the fields: in the core's own layout,
         sta coreb+cpt_step
         lda stepv+1
         sta coreb+1+cpt_step
-        jsr showl               ; the lines through the module or show
+        lda mearly              ; the music first: its player is the core's
+        beq @nm                 ; module until the module's parts are in,
+        lda nhand               ; when it hands over (its +78: the blocks
+        sta showbuf+78          ; then; +79 the module's init, frame and
+        ldx #5                  ; stop, as the core had them; +85 the
+@hv     lda coreb+cpt_init,x    ; progress a page; none until then)
+        sta showbuf+79,x
+        lda stgent,x
+        sta coreb+cpt_init,x
+        dex
+        bpl @hv
+        lda stepv
+        sta showbuf+85
+        lda stepv+1
+        sta showbuf+86
+        lda #0
+        sta coreb+cpt_step
+        sta coreb+1+cpt_step
+@nm     jsr showl               ; the lines through the module or show
         lda #0
         bcc @sl
         lda #$20
@@ -729,9 +775,10 @@ flatcol lda opt_lines
         rts
 
 ; showl  c set when the loading lines go on through the module or show:
-; asked (opt_showl), a module or show there is, and the style has lines
-; (or cycles: lined) (keeps x, y)
+; asked (opt_showl, or the cycle, which needs them), a module or show
+; there is, and the style has lines (or cycles: lined) (keeps x, y)
 showl   lda opt_showl
+        ora opt_cyc
         beq @n
         lda modon
         beq @n
@@ -795,14 +842,14 @@ cmtab   word coreb+c2p2,coreb+c2p2+15,corelen-c2p2      ; (up) the end
         word coreb+c2p1,coreb+c2p1+3,c2p2-c2p1          ; (up) the middle
         word coreb+c2p1+3,coreb+c2p1,c2p2-c2p1          ; (down) the middle
         word coreb+c2p2+15,coreb+c2p2,corelen-c2p2      ; (down) the end
-        word coreb+cfxp+3,coreb+cfxp+8,corelen-cfxp-3   ; (up) core_fx: past the effect's 3rd
-        word coreb+cfxp+8,coreb+cfxp+3,corelen-cfxp-3   ; (down)
+        word coreb+cfxp+3,coreb+cfxp+cfxlong,corelen-cfxp-3   ; (up) core_fx: past the effect's 3rd
+        word coreb+cfxp+cfxlong,coreb+cfxp+3,corelen-cfxp-3   ; (down)
 
 ; ------------------------------------------------------------
 ; corefx  coreb from the core to core_fx, in place (an effect's loading
 ; lines: payload.asm's fxd, tools/c64build.py's fx_patch): past the
-; effect's 3rd byte moved up 5, then the (gap, xor) pairs; corefxd back
-; (the pairs again, then down 5)
+; effect's 3rd byte moved up 7 (cfxlong - 3), then the (gap, xor) pairs;
+; corefxd back (the pairs again, then down 7)
 ;   uses: a, x, y, t0, t1, p1-p3
 ; ------------------------------------------------------------
 corefxs byte 0                  ; coreb: 0 the core, 1 core_fx
@@ -811,8 +858,8 @@ corefx  lda corefxs
         inc corefxs
         ldx #24
         jsr cmvup
-        lda #0                  ; (the 5 bytes made: as the pairs have them)
-        ldx #4
+        lda #0                  ; (the 7 bytes made: as the pairs have them)
+        ldx #cfxlong-4
 @z      sta coreb+cfxp+3,x
         dex
         bpl @z
@@ -825,8 +872,8 @@ corefxd lda corefxs
         ldx #30
         jsr cmv
         jsr mvdn
-        lda #0                  ; (the 5 past it: zero, as corecp left them)
-        ldx #4
+        lda #0                  ; (the 7 past it: zero, as corecp left them)
+        ldx #cfxlong-4
 @z      sta coreb+corelen,x
         dex
         bpl @z
@@ -886,8 +933,11 @@ fxset   lda opt_fxb             ; the effect and its colour: opt_fx's, or
         sta fxcol
         lda #fxplain
 @e      sta fxi
+        sta t0                  ; (x 10: its bytes in fxtpl)
         asl a
         asl a
+        clc
+        adc t0
         asl a
         tax
         ldy #0
@@ -895,23 +945,42 @@ fxset   lda opt_fxb             ; the effect and its colour: opt_fx's, or
         sta coreb+cfxp,y
         inx
         iny
-        cpy #8
+        cpy #cfxlong
         bcc @c
-        lda opt_cyc             ; -cycle: inc $d020 at each page
-        beq @nc
+        ldx fxi
+        lda fxval,x             ; its value (and, ora, eor; line: the line's colour)
+        beq @nv
+        tay
+        lda opt_fxn
+        sta coreb+cfxp,y
+@nv     lda fxcol
+        sta coreb+cfxbc
+        ldy fxcof,x             ; line: the border's colour in the effect too
+        beq @nb
+        sta coreb+cfxp,y
+@nb     lda opt_cyc             ; -cycle: inc $d020 at each page; line: its
+        beq @nc                 ; border's colour one on at each block (in
+        lda fxcof,x             ; stron, at a good block's end)
+        bne @lc
         lda #$ee
         sta coreb+cfxcyc
         lda #$20
         sta coreb+cfxcyc+1
         lda #$d0
         sta coreb+cfxcyc+2
-@nc     ldx fxi
-        lda fxval,x
-        beq @nv
-        lda opt_fxn
-        sta coreb+cfxp+4
-@nv     lda fxcol
+        bne @nc
+@lc     clc                     ; inc the border's colour's byte; cmp #$00
+        adc #cfxslo
         sta coreb+cfxbc
+        lda #$ee
+        sta coreb+cfxbc-1
+        lda #cfxshi
+        sta coreb+cfxbc+1
+        lda #$c9
+        sta coreb+cfxbc+2
+        lda #0
+        sta coreb+cfxbc+3
+@nc     ldx fxi
         lda fxpa,x
         clc
         adc #cfxslo
@@ -1287,7 +1356,9 @@ tapbase lda #<romtotal
 
 ; ------------------------------------------------------------
 ; tapchk  room for the .tap file on its drive: the directory's last
-; line (blocks free) against its blocks ((20 + tapn) / 254, rounded up)
+; line (blocks free) against its blocks ((20 + tapn) / 254, rounded up).
+; Not enough: return looks again (another disk in the drive), another
+; key stops
 ;   out:  c set if it doesn't fit (said)
 ; ------------------------------------------------------------
 tapchk  lda tapn                ; its blocks
@@ -1375,7 +1446,14 @@ tapchk  lda tapn                ; its blocks
         ldx #<tx_room4
         ldy #>tx_room4
         jsr print
-        sec
+        lda #0                  ; (no keys from before)
+        sta $c6
+@k      jsr getin
+        beq @k
+        cmp #13
+        bne @no
+        jmp tapchk              ; (another disk: its room)
+@no     sec
         rts
 @ok     clc
         rts
@@ -1386,7 +1464,8 @@ tx_dirn = 17
 tx_room1 text "not enough room on drive ",0
 tx_room2 text ":",13,0
 tx_room3 text " blocks needed, ",0
-tx_room4 text " free",13,"(a 1581, a cmd drive or an sd2iec)",13,0
+tx_room4 text " free",13,"(a 1581, a cmd drive or an sd2iec)",13,13
+        text "another disk in: return to look again;",13,"another key stops",13,0
 addn    clc
         adc tapn
         sta tapn

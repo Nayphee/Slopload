@@ -80,12 +80,7 @@ dsbuf   byte 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
 prgdev  byte 8                  ; the .tap's drive
 prglen  byte 0                  ; its name
 prgname byte 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
-paddr   word 0                  ; (unused here)
 eof     byte 0
-tapdev  byte 0                  ; (unused here)
-tapfnl  byte 0
-tapfname byte 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
-tapn    byte 0,0,0
 
 ; ---- the tape in the REU ----
 hdr     byte 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
@@ -171,8 +166,13 @@ write   jsr presspl
 quit    jsr print
         lda #$37
         sta $01
+        sei                     ; (RESTOR writes $0314/$0315 a byte at a time)
         jsr $ff8a               ; the KERNAL's vectors again (RESTORE: not
-        jmp ($a002)             ; this program's rti); BASIC's warm start
+        jsr $e453               ; this program's rti), BASIC's own, and its
+        jsr $e3bf               ; zero page: this program kept its pointers
+        jsr $a644               ; where BASIC's are ($2B on), and a LOAD after
+        cli                     ; it went wherever they pointed. NEW, and
+        jmp ($a002)             ; BASIC's warm start
 rtiv    rti
 wdone   ldx #<tx_done           ; (tests stop here)
         ldy #>tx_done

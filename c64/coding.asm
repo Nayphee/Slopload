@@ -755,8 +755,18 @@ choose  ldx blk                 ; nbody = n + 2 (pad, check)
         sta cph
         lda bset,x              ; the least h, and the share (0: none)
         and #1
-        beq @boot
-        ldx opt_speed           ; the module's: with the screen on, the
+        bne @mod
+        jmp @boot
+@mod    lda bset,x              ; (bit 2: the music first's, the module's
+        and #4                  ; parts while its player plays: the screen
+        beq @md                 ; off, the player's share)
+        ldx opt_speed
+        lda hminb,x
+        sta hmin
+        lda stgshr
+        sta share
+        jmp @b
+@md     ldx opt_speed           ; the module's: with the screen on, the
         lda mdscr               ; speed's h + its jitter rounded up to 4
         beq @off                ; (124 at most); off, as at boot
         jsr fxon                ; (core_fx: the effect's cost, the cycle's 3)

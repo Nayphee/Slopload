@@ -1,22 +1,31 @@
 ; ------------------------------------------------------------
-; sidslm.asm  -  SID-SLM: a .sid tune made ready for SlopLoad 64, on the
-; C64: tried out, its stores the loader can't allow taken out, written as
-; a .slm, the file SlopLoad 64 reads for its music
+; sidslm.asm  -  SID-SLM: a tune made ready for SlopLoad 64, on the C64:
+; a .sid, or a PRG tune (a music editor's: DMC, EMS, Future Composer...),
+; tried out, its stores the loader can't allow taken out, written as a
+; .slm, the file SlopLoad 64 reads for its music
 ;
-; LOAD"SID-SLM",8 and RUN. Asks for the drive and the .sid file ("$" for
-; the drive's directory, "$:sl*" for the names starting sl, "@" for its
-; status and commands: disk.asm, as SlopLoad 64's @), and the song, when
-; it has several; tries it out (its init and 3,000 play
-; calls in a 6502 emulated in memory, trial.asm: about two minutes on a
-; stock C64), says what it found, asks for the .slm's name (the .sid's,
-; ending .slm) and writes it. A tune it refuses gets a reason. RUN/STOP
-; stops a trial.
+; LOAD"SID-SLM",8 and RUN. A menu as SlopLoad 64's: each setting a line,
+; changed by its number in any order (the screen cleared, the line's name
+; in a light blue bar over its questions), the settings kept after a
+; .slm is written. 1 the tune: the drive and the file ("$" for the
+; drive's directory, "$:sl*" for the names starting sl, "@" for its
+; status and commands: disk.asm, as SlopLoad 64's @). A PSID file is a
+; .sid; any other (not named .sid) a PRG tune, its load address its first
+; two bytes. 2 a .sid's song. A PRG tune is called as lines 3-6 say: 3
+; init (lda #$00, jsr $1000: init's a and address, in hex), 4 play (jsr
+; $1003), 5 play calls a frame (1-8), 6 the machine it was made for (PAL,
+; NTSC); init its load address and play three past it unless changed, as
+; most editors' players are. A .sid says those itself. RETURN tries it
+; out (its init and 3,000 play calls in a 6502 emulated in memory,
+; trial.asm: about two minutes on a stock C64), says what it found, asks
+; for the .slm's name (the file's, ending .slm) and writes it. A tune it
+; refuses gets a reason. RUN/STOP stops a trial; q quits.
 ;
 ; A tune over 4,096 bytes: asked, its song is cut down to the part it
 ; uses (sidcut.asm, as the PC's sidstrip.py -cut: five minutes of play
 ; watched, then the cut tried over the same five; about half an hour or
 ; more on a stock C64), then written as any other. A file longer than
-; the stage (about 17 KB) is read to its end all the same: the stage
+; the stage (about 13 KB) is read to its end all the same: the stage
 ; keeps its start, ring its last 256 bytes; cut, the tune's pages the
 ; stage hasn't room for are read from the file again when the song first
 ; uses them (pgread, for sidcut.asm's pager), so the disk must stay in.
@@ -74,6 +83,7 @@ reumax = 1                      ; (machine.asm: an REU found, not sized)
 mpoolp = (bssend + 255) / 256   ; the music pool's page: 4096 + 256 bytes
 mpool = mpoolp*256              ; after the program
 stage = mpool + $1100           ; the file, as read: up to $9fff
+stage2 = stage + 2              ; (a PRG tune's bytes: after its load address)
 stagemax = $a000 - stage
 ring = $cc00                    ; the file's last 256 bytes as read (rdfile;
                                 ; sidcut.asm's ctdl later)
@@ -86,6 +96,7 @@ cutcalls = 15000                ; ... a cut's (five minutes, as the PC's)
         jmp main
 
         incasm "io.asm"
+        incasm "iohex.asm"
 prch = chrout                   ; (print's character: no words packed here)
         incasm "disk.asm"
         incasm "wfile.asm"
@@ -102,12 +113,6 @@ dsbuf   byte 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
 prgdev  byte 8                  ; the drive
 prglen  byte 0                  ; the .sid's name
 prgname byte 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
-paddr   word 0                  ; (unused here)
-eof     byte 0
-tapdev  byte 0                  ; (unused here)
-tapfnl  byte 0
-tapfname byte 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
-tapn    byte 0,0,0
 reusav  byte 0                  ; (machine.asm)
 
 ; ---- the tune (sidread.asm's) ----
@@ -138,6 +143,18 @@ mspd    byte 0,0,0,0
 mcut    byte 0                  ; 1: over 4096 bytes, its song cut down
 mdat    word 0                  ; where its bytes start in the file (stage)
 mcalls  word 0                  ; the trial's play calls
+mprg    byte 0                  ; 1: a PRG tune (prghdr), 0 a .sid (sidhdr)
+tok     byte 0                  ; 1: a tune chosen (line 1)
+stok    byte 0                  ; 1: the stage has its file as read (a trial
+                                ; takes it: return reads it again)
+pinit   word 0                  ; a PRG tune: init (its address, its a),
+pa      byte 0
+pplay   word 0                  ; play,
+pcalls  byte 1                  ; play calls a frame (1-8),
+pntsc   byte 0                  ; 1: made for NTSC (0: PAL)
+fdrv    byte 8                  ; (line 1: the drive asked)
+irow    byte 0                  ; the menu: the row
+usedc   byte 5                  ; ... its value's colour (item)
 mfoff   word 0                  ; (cut: the tune's place in the file,
 mhave   word 0                  ; its bytes in the stage, the stage's
 pgend   byte 0                  ; first page after them,
@@ -169,81 +186,432 @@ main    lda #<rtiv              ; restore: nothing (the nmi vector)
         sta prgdev
 @d      jsr detect
         jsr mknpool
-again   ldx #$ff
+
+; ------------------------------------------------------------
+; menu  every setting on a line of its own (1-6), changed by its number
+; at any time, as SlopLoad 64's: the screen cleared, its name in a light
+; blue bar on the top row and its questions under it; return tries the
+; tune out and writes the .slm (the settings stay), @ the disk, q quits.
+; An action returns c set when it said something: "press any key"
+; first, then the menu again.
+; ------------------------------------------------------------
+menu    ldx #$ff
         txs
-        lda #0
-        sta $d020
-        sta $d021
-        lda #5
-        sta 646
-        lda #147
-        jsr chrout
-        ldx #<tx_title
-        ldy #>tx_title
-        jsr print
         jsr clrchn
         lda #2
         jsr close
-        jsr ask                 ; the .sid, read
-        bcs @next
-        lda #0
-        sta mok
-        sta mnws
-        ldx #31
-@z      sta mzp,x
-        sta mtitle,x
-        dex
-        bpl @z
-        jsr ldtune              ; checked, tried out
-        lda mok
-        cmp #1
-        bne @next
-        jsr report
-        jsr name                ; the .slm: named, written
-@next   ldx #<tx_next
-        ldy #>tx_next
-        jsr print
+        jsr mdraw
 @k      jsr getin
         beq @k
-        cmp #'q'
-        bne again
+        cmp #13
+        bne @q
+        lda #7                  ; return: try it, write the .slm
+        jsr ptitle
+        jsr atry
+        jmp @any
+@q      cmp #'@'                ; @: the disk, its files and commands
+        bne @qq
+        lda #8
+        jsr ptitle
+        jsr adisk               ; (it ends on return alone: the menu again)
+        jmp menu
+@qq     cmp #'q'
+        bne @n
         jsr cmdclose
+        jsr look
         ldx #<tx_bye
         ldy #>tx_bye
         jsr print
         lda #$37
         sta $01
+        sei                     ; (RESTOR writes $0314/$0315 a byte at a time)
         jsr $ff8a               ; the KERNAL's vectors again (RESTORE: not
-        jmp ($a002)             ; this program's rti); BASIC's warm start
+        jsr $e453               ; this program's rti), BASIC's own, and its
+        jsr $e3bf               ; zero page: this program kept its pointers
+        jsr $a644               ; where BASIC's are ($2B on), and a LOAD after
+        cli                     ; it went wherever they pointed. NEW, and
+        jmp ($a002)             ; BASIC's warm start
+@n      cmp #'1'
+        bcc @k
+        cmp #'7'
+        bcs @k
+        and #15                 ; 1-6: its line
+        pha
+        jsr ptitle
+        pla
+        asl a
+        tax
+        lda acts-2,x
+        sta @j+1
+        lda acts-1,x
+        sta @j+2
+@j      jsr @j                  ; (patched: the line's action)
+        bcc menu
+@any    jsr anykey
+        jmp menu
+acts    word atune,asong,ainit,aplay,aspeed,aclock
 rtiv    rti
 rtivs   word rtiv,rtiv,rtiv       ; (the RAM under the KERNAL's vectors)
 
+; look  the screen cleared, its colours the tool's
+look    lda #0
+        sta $d020
+        sta $d021
+        lda #5
+        sta 646
+        lda #147
+        jmp chrout
+
 ; ------------------------------------------------------------
-; ask  the drive and the .sid's name; the file read to stage
-;   out:  c set if it can't be read (said)
+; mdraw  the screen cleared, the menu: the title (rows 0-1), lines 1-6
+; (rows 3-8), the tune's place and name (rows 10-11), the keys (13-14).
+; A line a .sid sets itself, or that has no choice, is grey
 ; ------------------------------------------------------------
-ask     lda prgdev
+mdraw   jsr look
+        ldx #<tx_head
+        ldy #>tx_head
+        jsr print
+        lda #1                  ; 1 the tune: d:name, what it is
+        ldx #3
+        jsr item
+        lda tok
+        bne @t1
+        jsr none
+        jmp @l2
+@t1     lda prgdev
+        ldx #0
+        jsr prdec16
+        lda #':'
+        jsr chrout
+        ldx #0
+@tn     cpx prglen
+        bcs @tk
+        lda prgname,x
+        jsr prsafe
+        inx
+        bne @tn
+@tk     ldx #<tx_ksid
+        ldy #>tx_ksid
+        lda mprg
+        beq @tk2
+        ldx #<tx_kprg
+        ldy #>tx_kprg
+@tk2    jsr print
+@l2     jsr grey                ; 2 the song: a .sid's of several
+        lda tok
+        beq @s0
+        lda mprg
+        bne @s0
+        lda msongs
+        cmp #2
+        bcc @s1
+        jsr white
+@s1     lda #2
+        jsr item0
+        lda msong
+        ldx #0
+        jsr prdec16
+        ldx #<tx_of
+        ldy #>tx_of
+        jsr print
+        lda msongs
+        ldx #0
+        jsr prdec16
+        jmp @l3
+@s0     lda #2
+        jsr item0
+        jsr none
+@l3     jsr prgcol              ; 3 init: lda #$aa : jsr $hhhh
+        lda #3
+        jsr item0
+        lda tok
+        beq @n3
+        ldx #<tx_lda
+        ldy #>tx_lda
+        jsr print
+        lda mprg
+        bne @i3
+        lda msong               ; (a .sid's: its song - 1, its init)
+        sec
+        sbc #1
+        jsr prhex2
+        lda minit
+        ldx minit+1
+        jmp @j3
+@i3     lda pa
+        jsr prhex2
+        lda pinit
+        ldx pinit+1
+@j3     pha
+        txa
+        pha
+        ldx #<tx_jsr
+        ldy #>tx_jsr
+        jsr print
+        pla
+        tax
+        pla
+        jsr prhex4
+        jmp @l4
+@n3     jsr none
+@l4     jsr prgcol              ; 4 play: jsr $hhhh
+        lda #4
+        jsr item0
+        lda tok
+        beq @n4
+        ldx #<tx_jsr2
+        ldy #>tx_jsr2
+        jsr print
+        lda mprg
+        bne @p4
+        lda mplay
+        ldx mplay+1
+        jmp @q4
+@p4     lda pplay
+        ldx pplay+1
+@q4     jsr prhex4
+        jmp @l5
+@n4     jsr none
+@l5     jsr prgcol              ; 5 play calls a frame
+        lda #5
+        jsr item0
+        lda tok
+        beq @n5
+        lda mprg
+        beq @d5
+        lda pcalls
+        ldx #<tx_once
+        ldy #>tx_once
+        cmp #2
+        bcc @o5
+        ora #'0'
+        jsr chrout
+        ldx #<tx_times
+        ldy #>tx_times
+@o5     jsr print
+        jmp @l6
+@d5     ldx #<tx_itsays
+        ldy #>tx_itsays
+        jsr print
+        jmp @l6
+@n5     jsr none
+@l6     jsr prgcol              ; 6 made for: PAL or NTSC
+        lda #6
+        jsr item0
+        lda tok
+        beq @n6
+        ldx #<tx_itsays
+        ldy #>tx_itsays
+        lda mprg
+        beq @o6
+        ldx #<tx_mpal
+        ldy #>tx_mpal
+        lda pntsc
+        beq @o6
+        ldx #<tx_mntsc
+        ldy #>tx_mntsc
+@o6     jsr print
+        jmp @l7
+@n6     jsr none
+@l7     lda tok                 ; the tune's place and name (grey)
+        beq @keys
+        ldx #10
+        ldy #2
+        clc
+        jsr plot
+        lda #151
+        jsr chrout
+        lda mload
+        ldx mload+1
+        jsr prhex4
+        lda #'-'
+        jsr chrout
+        lda mload               ; (its last byte: load + length - 1)
+        clc
+        adc mlen
+        sta t0
+        lda mload+1
+        adc mlen+1
+        sta t1
+        lda t0
+        bne @e
+        dec t1
+@e      dec t0
+        lda t1
+        tax
+        lda t0
+        jsr prhex4
+        lda #','
+        jsr chrout
+        lda #' '
+        jsr chrout
+        lda mlen
+        ldx mlen+1
+        jsr prdec16
+        ldx #<tx_bytes
+        ldy #>tx_bytes
+        jsr print
+        ldx #11
+        ldy #2
+        clc
+        jsr plot
+        ldx #0
+@ti     lda mtitle,x
+        beq @keys
+        jsr prsafe
+        inx
+        cpx #32
+        bcc @ti
+@keys   ldx #13                 ; the keys
+        ldy #0
+        clc
+        jsr plot
+        ldx #<tx_mkeys
+        ldy #>tx_mkeys
+        jmp print
+
+; item  line a's number and name (green) on row x, then its value's
+; colour (white, or grey: usedc); item0: on the row after the last
+item0   inc irow
+        ldx irow
+item    stx irow
+        pha
+        ldy #0
+        clc
+        jsr plot
+        lda #30                 ; green
+        jsr chrout
+        pla
+        pha
+        ora #'0'
+        jsr chrout
+        lda #' '
+        jsr chrout
+        pla
+        tax
+        lda lablo-1,x
+        ldy labhi-1,x
+        tax
+        jsr print
+        lda usedc
+        jsr chrout
+        lda #5                  ; (white for the next)
+        sta usedc
+        rts
+lablo   byte <tl1,<tl2,<tl3,<tl4,<tl5,<tl6,<tl7,<tl8
+labhi   byte >tl1,>tl2,>tl3,>tl4,>tl5,>tl6,>tl7,>tl8
+
+; prgcol  the next value grey unless a PRG tune is chosen (lines 3-6 are
+; a PRG tune's: a .sid says them itself); grey, white: the next value's
+prgcol  lda tok
+        beq grey
+        lda mprg
+        bne white
+grey    lda #151
+        sta usedc
+        rts
+white   lda #5
+        sta usedc
+        rts
+
+; none  "-"
+none    lda #'-'
+        jmp chrout
+
+; ptitle  the screen cleared, line a's name (7: return, 8: @ disk) in a
+; light blue bar on the top row, the cursor under it
+ptitle  pha
+        ldx #<tx_ttl
+        ldy #>tx_ttl
+        jsr print
+        pla
+        cmp #7
+        bcs @w
+        pha
+        ora #'0'
+        jsr chrout
+        lda #' '
+        jsr chrout
+        pla
+@w      tax
+        lda lablo-1,x
+        ldy labhi-1,x
+        tax
+        jsr print
+@sp     sec                     ; the bar to column 38
+        jsr plot
+        cpy #39
+        bcs @e
+        lda #' '
+        jsr chrout
+        jmp @sp
+@e      ldx #<tx_ttle
+        ldy #>tx_ttle
+        jmp print
+
+; anykey  "press any key" under what was said; a key
+anykey  sec                     ; (on a new line, unless at its start)
+        jsr plot
+        tya
+        beq @p
+        lda #13
+        jsr chrout
+@p      ldx #<tx_anyk
+        ldy #>tx_anyk
+        jsr print
+@k      jsr getin
+        beq @k
+        rts
+
+; say  the text at x/y said: c set (a key, then the menu)
+say     jsr print
+        sec
+        rts
+
+; adisk  @: a drive's status and commands (disk.asm), the drive asked
+adisk   lda ddev
+        bne @d
+        lda prgdev
+@d      ldx #<q_ddrive
+        ldy #>q_ddrive
+        jsr asknum
+        bcs @x
+        cmp #8
+        bcc @x
+        cmp #31
+        bcs @x
+        sta ddev
+        jsr dcmd
+@x      clc
+        rts
+
+; ------------------------------------------------------------
+; atune  line 1: the drive and the file, read (rdfile); what it is
+; (kind): a .sid's song its start song, a PRG tune's lines 3-6 its
+; defaults. Return alone at the name: as it was
+;   out:  c set if said (what it is, or why not)
+; ------------------------------------------------------------
+atune   lda fdrv
         ldx #<q_drive
         ldy #>q_drive
         jsr asknum
-        bcs ask
+        bcs atune
         cmp #8
-        bcc ask
+        bcc atune
         cmp #31
-        bcs ask
-        sta prgdev
+        bcs atune
+        sta fdrv
         sta ddev                ; ($ and @: disk.asm, on this drive)
-        ldx #<tx_dkeys
-        ldy #>tx_dkeys
-        jsr print
 @name   ldx #<q_file
         ldy #>q_file
         jsr print
         lda #16
         jsr readline
         lda inlen
-        beq @name
-        lda inbuf
+        bne @g
+        clc                     ; (return alone: as it was)
+        rts
+@g      lda inbuf
         cmp #'$'                ; its directory
         bne @at
         jsr dirshow
@@ -255,7 +623,9 @@ ask     lda prgdev
         bne @nm
         jsr dcmd
         jmp @name
-@nm     lda inlen
+@nm     lda fdrv
+        sta prgdev
+        lda inlen
         sta prglen
         tax
 @c      dex
@@ -263,7 +633,461 @@ ask     lda prgdev
         sta prgname,x
         txa
         bne @c
+        lda #0
+        sta tok
+        sta stok
+        jsr rdfile
+        bcc @rd
+        rts                     ; (said)
+@rd     lda #1
+        sta stok
+        jsr kind
+        bcs @x
+        lda #1
+        sta tok
+        ldx #<tx_isa            ; said: what it is
+        ldy #>tx_isa
+        lda mprg
+        beq @say
+        ldx #<tx_isp
+        ldy #>tx_isp
+@say    jsr print
+        sec
+@x      rts
+
+; ------------------------------------------------------------
+; kind  the file at stage: a PSID a .sid (sidhdr; its song the start
+; song); an RSID refused; a file named .sid that is neither refused;
+; else a PRG tune (prghdr; lines 3-6 its defaults: init its load address
+; with a = 0, play three past it, once a frame, PAL). wold: the ending
+; the .slm's name leaves out
+;   out:  c set if refused (said); mprg
+; ------------------------------------------------------------
+kind    ldx #3
+@p      lda stage,x
+        cmp psidm,x
+        bne @np
+        dex
+        bpl @p
+        lda #0
+        sta mprg
+        jsr sidhdr
+        bcs @x
+        jsr sidstart
+        ldx #3
+@ws     lda endsid,x
+        sta wold,x
+        dex
+        bpl @ws
+        clc
+@x      rts
+@np     ldx #3
+@r      lda stage,x
+        cmp rsidm,x
+        bne @nr
+        dex
+        bpl @r
+        lda #r_rsid
+        jmp hrefuse
+@nr     ldx #<endsid            ; named .sid: not a PRG tune
+        ldy #>endsid
+        jsr nmends
+        bcs @prg
+        lda #r_notmus
+        jmp hrefuse
+@prg    lda #1
+        sta mprg
+        jsr prghdr
+        bcs @x
+        lda mload               ; its defaults
+        sta pinit
+        clc
+        adc #3
+        sta pplay
+        lda mload+1
+        sta pinit+1
+        adc #0
+        sta pplay+1
+        lda #0
+        sta pa
+        sta pntsc
+        lda #1
+        sta pcalls
+        ldx #3
+@wp     lda endprg,x
+        sta wold,x
+        dex
+        bpl @wp
+        clc
+        rts
+psidm   byte $50,$53,$49,$44    ; "PSID"
+rsidm   byte $52,$53,$49,$44    ; "RSID"
+endsid  text ".sid"
+endprg  text ".prg"
+
+; nmends  c clear if the file's name (prgname) ends in the 4 characters
+; at x/y
+nmends  stx p1
+        sty p1+1
+        ldx prglen
+        cpx #5
+        bcc @no
+        ldy #3
+@c      dex
+        lda prgname,x
+        cmp (p1),y
+        bne @no
+        dey
+        bpl @c
+        clc
+        rts
+@no     sec
+        rts
+
+; hdr  the tune's fields from the file at stage: sidhdr or prghdr
+;   out:  c set if refused (said)
+hdr     lda mprg
+        bne prghdr
+        jmp sidhdr
+
+; ------------------------------------------------------------
+; prghdr  a PRG tune at stage: its load address (its first two bytes),
+; its bytes after them (mload, mlen, mdat), its name the file's less
+; .prg (mtitle)
+;   out:  c set if refused (said)
+; ------------------------------------------------------------
+prghdr  lda #0
+        sta mwhya
+        sta mwhya+1
+        lda #3
+        sta mkind
+        lda flen+1
+        bne @l
+        lda flen
+        cmp #3
+        bcs @l
+        lda #r_short
+        jmp hrefuse
+@l      lda stage
+        sta mload
+        lda stage+1
+        sta mload+1
+        lda flen
+        sec
+        sbc #2
+        sta mlen
+        lda flen+1
+        sbc #0
+        sta mlen+1
+        lda mload               ; past $ffff: load + length over $10000
+        clc
+        adc mlen
+        sta t0
+        lda mload+1
+        adc mlen+1
+        bcc @in
+        bne @past
+        lda t0                  ; (exactly $10000: its last byte $ffff)
+        beq @in
+@past   lda #r_past
+        jmp hrefuse
+@in     lda #<stage2
+        sta mdat
+        lda #>stage2
+        sta mdat+1
+        lda prglen              ; its name: the file's, less .prg
+        sta t4
+        ldx #<endprg
+        ldy #>endprg
+        jsr nmends
+        bcs @n
+        lda t4
+        sec
+        sbc #4
+        sta t4
+@n      ldx #0
+@t      lda #0
+        cpx t4
+        bcs @z
+        lda prgname,x
+@z      sta mtitle,x
+        inx
+        cpx #32
+        bcc @t
+        clc
+        rts
+
+; ------------------------------------------------------------
+; prgrate  mppal, mpntsc for a PRG tune: pcalls play calls a frame on the
+; machine it was made for (pntsc: NTSC), from the tables (slmgen.asm,
+; tools/c64build.py: sidstrip.py's prg_rates); mcia (the .slm's flag 4)
+; when more than once a frame; mver, mflg as a PSID's clock (flags)
+;   out:  c set if refused (said): more than 8 calls a PAL frame
+; ------------------------------------------------------------
+prgrate lda pcalls
+        sec
+        sbc #1
+        asl a
+        ldx pntsc
+        beq @p
+        clc
+        adc #16
+@p      tax
+        lda prtpal,x
+        sta mppal
+        lda prtpal+1,x
+        sta mppal+1
+        lda prtnt,x
+        sta mpntsc
+        lda prtnt+1,x
+        sta mpntsc+1
+        lda #2
+        sta mver
+        lda #4                  ; the clock's bits: PAL 1, NTSC 2
+        ldx pntsc
+        beq @c
+        lda #8
+@c      sta mflg
+        lda #0
+        ldx pcalls
+        cpx #2
+        bcc @o
+        lda #1
+@o      sta mcia
+        lda mppal               ; more than 8 times a PAL frame (7 or 8 calls a
+        cmp #<2496              ; frame, made for NTSC)? As a .sid at that rate
+        lda mppal+1             ; (sidrate) and as sidstrip.py: refused
+        sbc #>2496
+        bcs @ok
+        lda #r_fast
+        jsr mrefuse
+        sec
+        rts
+@ok     clc
+        rts
+
+; ------------------------------------------------------------
+; asong  line 2: a .sid's song (asksong)
+; ------------------------------------------------------------
+asong   jsr needtune
+        bcs @x
+        lda mprg
+        bne @p
+        lda msongs
+        cmp #2
+        bcc @one
+        jsr asksong
+        clc
+@x      rts
+@one    ldx #<tx_one
+        ldy #>tx_one
+        jmp say
+@p      ldx #<tx_prgs
+        ldy #>tx_prgs
+        jmp say
+
+; needtune  c set if no tune is chosen (said); needprg: or it's a .sid
+; (said: it says lines 3-6 itself)
+needtune
+        lda tok
+        bne @ok
+        ldx #<tx_need
+        ldy #>tx_need
+        jmp say
+@ok     clc
+        rts
+needprg jsr needtune
+        bcs @x
+        lda mprg
+        bne @x
+        ldx #<tx_sidsays
+        ldy #>tx_sidsays
+        jmp say
+@x      rts
+
+; ------------------------------------------------------------
+; ainit  line 3: a PRG tune's init, lda #$aa (pa) and jsr $hhhh (pinit)
+; ------------------------------------------------------------
+ainit   jsr needprg
+        bcs @x
+@a      lda pa
+        sta t4
+        lda #0
+        sta t5
+        lda #2
+        sta t3
+        ldx #<q_ia
+        ldy #>q_ia
+        jsr askhex
+        bcs @a
+        cpx #0
+        bne @a
+        sta pa
+@i      lda pinit
+        sta t4
+        lda pinit+1
+        sta t5
+        lda #4
+        sta t3
+        ldx #<q_ij
+        ldy #>q_ij
+        jsr askhex
+        bcs @i
+        sta pinit
+        stx pinit+1
+        clc
+@x      rts
+
+; aplay  line 4: a PRG tune's play, jsr $hhhh (pplay; not 0)
+aplay   jsr needprg
+        bcs @x
+@a      lda pplay
+        sta t4
+        lda pplay+1
+        sta t5
+        lda #4
+        sta t3
+        ldx #<q_pj
+        ldy #>q_pj
+        jsr askhex
+        bcs @a
+        sta t0
+        stx t1
+        ora t1
+        beq @a
+        lda t0
+        sta pplay
+        stx pplay+1
+        clc
+@x      rts
+
+; aspeed  line 5: a PRG tune's play calls a frame, 1-8 (pcalls)
+aspeed  jsr needprg
+        bcs @x
+@a      lda pcalls
+        ldx #<q_calls
+        ldy #>q_calls
+        jsr asknum
+        bcs @a
+        cmp #1
+        bcc @a
+        cmp #9
+        bcs @a
+        sta pcalls
+        clc
+@x      rts
+
+; aclock  line 6: the machine a PRG tune was made for (pntsc)
+aclock  jsr needprg
+        bcs @x
+        lda pntsc
+        ldx #<q_clock
+        ldy #>q_clock
+        jsr ask12
+        sta pntsc
+        clc
+@x      rts
+
+; ------------------------------------------------------------
+; atry  return: the tune tried out (the file read again if a trial has
+; taken the stage), what it found said, the .slm named and written
+;   out:  c set (said)
+; ------------------------------------------------------------
+atry    jsr needtune
+        bcc @t
+        rts
+@t      lda stok
+        bne @in
+        jsr rdfile
+        bcc @in
+        rts
+@in     lda #0                  ; (the trial takes the stage)
+        sta stok
+        sta mok
+        sta mnws
+        ldx #31
+@z      sta mzp,x
+        dex
+        bpl @z
+        jsr hdr                 ; its fields, from the file
+        bcs @x
+        lda mprg
+        bne @p
+        lda msong               ; a .sid: its song
+        sec
+        sbc #1
+        sta ma
+        jmp @go
+@p      lda pa                  ; a PRG tune: as lines 3 and 4 say (its
+        sta ma                  ; song init's a + 1, as a .sid's: what a
+        clc                     ; cut says)
+        adc #1
+        sta msong
+        lda pinit
+        sta minit
+        lda pinit+1
+        sta minit+1
+        lda pplay
+        sta mplay
+        lda pplay+1
+        sta mplay+1
+@go     jsr ldgo
+        lda mok
+        cmp #1
+        bne @s
+        jsr report
+        jsr name
+@s      sec
+@x      rts
+
+; ------------------------------------------------------------
+; askhex  the question at x/y, its default t4/t5 in hex in brackets
+; ($hh with t3 = 2, else $hhhh): a/x, c set if not a hex number (the
+; default on an empty line)
+; ------------------------------------------------------------
+askhex  jsr print
+        lda t3
+        cmp #2
+        bne @w
+        lda #'$'
+        jsr chrout
+        lda t4
+        jsr prhex2
+        jmp @q
+@w      lda t4
+        ldx t5
+        jsr prhex4
+@q      ldx #<tx_ask
+        ldy #>tx_ask
+        jsr print
+        lda #5
+        jsr readline
+        lda inlen
+        bne @h
+        lda t4
+        ldx t5
+        clc
+        rts
+@h      jmp inhex
+
+; ask12  a choice of two, the question at x/y (it lists them as 1 and
+; 2), the default a (0 or 1): a = 0 or 1 (the default if neither)
+ask12   sta t4                  ; (t4: readline takes t6)
+        clc
+        adc #1
+        jsr asknum
+        bcs @d
+        sec
+        sbc #1
+        cmp #2
+        bcc @x
+@d      lda t4
+@x      rts
+
+; ------------------------------------------------------------
 ; rdfile  prgname from prgdev to stage, its length in flen
+;   out:  c set if it can't be read (said)
+; ------------------------------------------------------------
 rdfile  ldx #<tx_reading
         ldy #>tx_reading
         jsr print
@@ -359,28 +1183,6 @@ asknum  sta t5
         clc
 @x      rts
 
-; ldtune  the file at stage: a PSID tried out (sidread.asm's ldsid); an
-; RSID, or anything else, refused
-ldtune  ldx #3
-@p      lda stage,x
-        cmp psidm,x
-        bne @np
-        dex
-        bpl @p
-        jmp ldsid
-@np     ldx #3
-@r      lda stage,x
-        cmp rsidm,x
-        bne @nr
-        dex
-        bpl @r
-        lda #r_rsid
-        jmp mrefuse
-@nr     lda #r_notmus
-        jmp mrefuse
-psidm   byte $50,$53,$49,$44    ; "PSID"
-rsidm   byte $52,$53,$49,$44    ; "RSID"
-
 ; ------------------------------------------------------------
 ; report  what the trial found: the tune, its rate, its longest call,
 ; its zero page and workspace
@@ -394,12 +1196,27 @@ report  ldx #0                  ; its name
         bcc @t
 @te     lda #13
         jsr chrout
-        ldx #<tx_frame          ; its rate
-        ldy #>tx_frame
-        lda mcia
-        beq @r
+        lda mprg                ; its rate: a PRG tune's as it was given
+        beq @sd
+        lda pcalls
+        cmp #2
+        bcc @f
+        ldx #<tx_plays
+        ldy #>tx_plays
+        jsr print
+        lda pcalls
+        ora #'0'
+        jsr chrout
+        ldx #<tx_times2
+        ldy #>tx_times2
+        bne @r
+@sd     lda mcia
+        beq @f
         ldx #<tx_cia
         ldy #>tx_cia
+        bne @r
+@f      ldx #<tx_frame
+        ldy #>tx_frame
 @r      jsr print
         ldx #<tx_cyc            ; its longest call
         ldy #>tx_cyc
@@ -591,12 +1408,27 @@ name    ldx #<q_out
         jsr chrout
         lda #0
         jsr chrout
+        lda mprg
+        bne @pt
         lda #$16                ; its name, author, released (ASCII, as in the .sid)
         jsr wtext
         lda #$36
         jsr wtext
         lda #$56
         jsr wtext
+        jmp @tb
+@pt     ldx #0                  ; a PRG tune: its name (the file's), no
+@pn     lda mtitle,x            ; author, no released
+        jsr chrout
+        inx
+        cpx #32
+        bcc @pn
+        ldx #64
+@pz     lda #0
+        jsr chrout
+        dex
+        bne @pz
+@tb
         lda mload               ; its bytes, as the trial left them
         ldx #>mpool
         ldy mlen
@@ -722,6 +1554,8 @@ r_rsid  = 2
 r_noplay = 3
 r_sids  = 4
 r_long  = 5
+r_short = 6                     ; (a PRG tune: two bytes or fewer)
+r_past  = 14                    ; (a PRG tune: past $ffff)
 r_fast  = 7
 r_slow  = 8
 r_cutroom = 9                   ; (cutpost's 1-3: 9-11)
@@ -1014,11 +1848,17 @@ cutalign
         sta mhave
         lda mlen+1
         sta mhave+1
-        lda flen                ; (the file longer than the stage?)
-        cmp #<stagemax+1
-        lda flen+1
+        lda mload               ; (past the stage's end, moved up to its load
+        clc                     ; address's low byte? A file longer than the
+        adc mlen                ; stage is; one that just fits can be too: its
+        tax                     ; last bytes then went into the trial's tables
+        lda mlen+1              ; at $a000, and a wrong cut was written)
+        adc #0
+        bcs @far
+        cpx #<stagemax+1
         sbc #>stagemax+1
         bcc @in
+@far
         lda #<$8000-stage       ; (the stage's bytes below $8000, less the
         sec                     ; load address's offset in its page)
         sbc mload
@@ -1224,8 +2064,9 @@ pgfail  lda #r_cutread
         bne cutout
 cutroom lda #r_cutroom
 cutout  pha
-        lda #$37                ; (the KERNAL first: the trace's $01 is $34)
-        sta $01
+        lda #$36                ; (the KERNAL first: the trace's $01 is $34.
+        sta $01                 ; $36 as everywhere here, not $37: with BASIC in,
+                                ; a later cut compared its sums with the ROM's bytes)
         jsr clrchn
         lda #2
         jsr close
@@ -1434,11 +2275,11 @@ copyn   ldy #0                  ; t2/t3 bytes from p2 to p1
         jmp @c
 @x      rts
 
-whylo   byte <rsn0,<rsn1,<rsn2,<rsn3,<rsn4,<rsn5,<rsn0,<rsn7,<rsn8,<rsn9,<rsn10,<rsn11,<rsn12,<rsn13,<rsn0,<rsn0
+whylo   byte <rsn0,<rsn1,<rsn2,<rsn3,<rsn4,<rsn5,<rsn6,<rsn7,<rsn8,<rsn9,<rsn10,<rsn11,<rsn12,<rsn13,<rsn14,<rsn0
         byte <rsn0,<rsn0,<rsn0,<rsn0
         byte <rst1,<rst2,<rst3,<rst4,<rst5,<rst6,<rst7,<rst8,<rst9,<rst10,<rst11,<rst12,<rst13,<rst14,<rst15
         byte <rst16
-whyhi   byte >rsn0,>rsn1,>rsn2,>rsn3,>rsn4,>rsn5,>rsn0,>rsn7,>rsn8,>rsn9,>rsn10,>rsn11,>rsn12,>rsn13,>rsn0,>rsn0
+whyhi   byte >rsn0,>rsn1,>rsn2,>rsn3,>rsn4,>rsn5,>rsn6,>rsn7,>rsn8,>rsn9,>rsn10,>rsn11,>rsn12,>rsn13,>rsn14,>rsn0
         byte >rsn0,>rsn0,>rsn0,>rsn0
         byte >rst1,>rst2,>rst3,>rst4,>rst5,>rst6,>rst7,>rst8,>rst9,>rst10,>rst11,>rst12,>rst13,>rst14,>rst15
         byte >rst16
@@ -1452,6 +2293,8 @@ rsn2      text "rsid: takes interrupts",0
 rsn3      text "no play routine",0
 rsn4      text "for more than one sid",0
 rsn5      text "over 4096 bytes",0
+rsn6      text "too short for a tune",0
+rsn14     text "runs past $ffff",0
 rsn7      text "over 8 calls a frame",0
 rsn8      text "plays too slowly",0
 rst1      text "calls the rom",0
@@ -1477,11 +2320,48 @@ rsn12     text "plays differently cut",0
 rsn13     text "can't read the file again",0
 
 ; ---- texts ----
-tx_title text 13,"sid-slm - a .sid tune made ready for",13,"slopload 64 (a .slm)",13,13,0
+        incasm "slmgen.asm"     ; (tx_head and prtpal, prtnt: tools/c64build.py)
+tl1     text "tune      ",0     ; (10 each: the values at column 12)
+tl2     text "song      ",0
+tl3     text "init      ",0
+tl4     text "play      ",0
+tl5     text "speed     ",0
+tl6     text "made for  ",0
+tl7     text "try it, write the .slm",0
+tl8     text "@ disk",0
+tx_mkeys text 155,"1-6: change  @: disk  q: quit",13,"return: try it out, write the .slm",30,0
+tx_ttl  text 147,154,18," ",0   ; cleared; light blue, reverse
+tx_ttle text 146,30,13,0        ; (off, green, the next row)
+tx_anyk text 155,"press any key",30,0
+tx_ksid text " (a .sid)",0
+tx_kprg text " (a prg)",0
+tx_of   text " of ",0
+tx_lda  text "lda #$",0
+tx_jsr  text " : jsr ",0
+tx_jsr2 text "jsr ",0
+tx_once text "once a frame",0
+tx_times text " times a frame",0
+tx_itsays text "the .sid's own",0
+tx_mpal text "pal",0
+tx_mntsc text "ntsc",0
+tx_bytes text " bytes",0
+tx_isa  text "a .sid: its song is line 2",13,0
+tx_isp  text "a prg tune: lines 3-6 say how it is",13,"called (init its load address, play",13,"three past it, unless changed)",13,0
+tx_one  text "it has one song",13,0
+tx_prgs text "a prg tune: its song is what init's a",13,"picks (line 3)",13,0
+tx_need text "choose a tune first (1)",13,0
+tx_sidsays text "a .sid says this itself",13,0
+q_ia    text "init: lda #[",0
+q_ij    text "      jsr [",0
+q_pj    text "play: jsr [",0
+q_calls text "play calls a frame, 1-8 [",0
+q_clock text "the machine it was made for:",13,"  1 pal",13,"  2 ntsc",13,"which [",0
+q_ddrive text "drive [",0
+tx_plays text "plays ",0
+tx_times2 text " times a frame",13,0
 tx_bye  text "bye.",13,0
-q_drive text "drive with the .sid file [",0
-q_file  text "its file name? ",0
-tx_dkeys text "($: its directory, @: the disk)",13,0
+q_drive text "drive with the tune [",0
+q_file  text "its file name ($: files, @: disk,",13,"return: keep it)? ",0
 tx_ask  text "]? ",0
 tx_reading text "reading it...",13,0
 tx_big  text "too big for a tune",13,0
@@ -1494,7 +2374,7 @@ tx_zp   text "zero page: ",0
 tx_ws   text 13,"workspace: ",0
 tx_none text "none",0
 tx_over text "it is ",0
-q_cut   text " bytes, over 4096: cut it",13,"down to one song (up to 2 hours; y/n)? ",0
+q_cut   text " bytes, over 4096: cut it",13,"down to one song (to 2 hours; y/n)? ",0
 tx_cutting text "cutting it: ",0
 tx_again text "over 4096: again, as init leaves it",13,0
 tx_after text "after init: ",0
@@ -1508,8 +2388,7 @@ tx_cd1  text 13,"note: cut down, song ",0
 tx_cd2  text " only",13,"(",0
 tx_cd3  text " of the tune's ",0
 tx_cd4  text " bytes: what",13,"its first 5 minutes of play use)",0
-tx_slm  text 13,"choose it in slopload 64 (5: the music)",13,0
-tx_next text 13,"q: quit  other keys: another tune",13,0
+tx_slm  text 13,"choose it in slopload 64: 5, the music",13,0
 wold    text ".sid"                 ; (wfile.asm: the name's ending, and the new one)
 wnew    byte 4
         text ".slm"

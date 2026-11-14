@@ -97,12 +97,6 @@ dsbuf   byte 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
 prgdev  byte 8                  ; the drive
 prglen  byte 0                  ; the .pet's name
 prgname byte 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
-paddr   word 0                  ; (unused here)
-eof     byte 0
-tapdev  byte 0                  ; (unused here)
-tapfnl  byte 0
-tapfname byte 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
-tapn    byte 0,0,0
 
 ; ---- this program's ----
 hdr     byte 0,0,0,0,0          ; the .pet's first bytes
@@ -155,13 +149,12 @@ main    lda #<rtiv              ; restore: nothing (the nmi vector)
         sta fdev
 
 ; ------------------------------------------------------------
-; menu  every setting on a line of its own (1-7), changed by its number
-; at any time: its name in reverse on row ttlrow and its questions
-; under it; s shows the module's screen, return writes the module (the
+; menu  every setting on a line of its own (1-8), changed by its number
+; at any time, as SlopLoad 64's: the screen cleared, its name in a light
+; blue bar on the top row and its questions under it; s shows the module's screen, return writes the module (the
 ; settings stay), q quits. An action returns c set when it said
 ; something: "press any key" first, then the menu again.
 ; ------------------------------------------------------------
-ttlrow  = 13
 menu    ldx #$ff
         txs
         jsr clrchn
@@ -172,16 +165,16 @@ menu    ldx #$ff
         beq @k
         cmp #13
         bne @q
-        lda #9                  ; return: write the module
+        lda #10                 ; return: write the module
         jsr ptitle
         jsr awrite
         jmp @any
 @q      cmp #'@'                ; @: the disk, its files and commands
         bne @qq
-        lda #11
+        lda #12
         jsr ptitle
-        jsr adisk
-        jmp @any
+        jsr adisk               ; (it ends on return alone: the menu again)
+        jmp menu
 @qq     cmp #'q'
         bne @s
         jsr cmdclose
@@ -191,16 +184,16 @@ menu    ldx #$ff
         jmp quit
 @s      cmp #'s'
         bne @n
-        lda #10                 ; s: show it
+        lda #11                 ; s: show it
         jsr ptitle
         jsr ashow
         bcc menu
         jmp @any
 @n      cmp #'1'
         bcc @k
-        cmp #'9'
+        cmp #'9'+1
         bcs @k
-        and #15                 ; 1-8: its line
+        and #15                 ; 1-9: its line
         pha
         jsr ptitle
         pla
@@ -214,7 +207,7 @@ menu    ldx #$ff
         bcc menu
 @any    jsr anykey
         jmp menu
-acts    word ascreen,amsg,arow,aspeed,acols,acount,afont,achain
+acts    word ascreen,amsg,arow,aspeed,acols,acount,afont,achain,asound
 
 ; adisk  @: a drive [8], then its status and commands, and $ its files
 ; (disk.asm, as SlopLoad 64's @)
@@ -229,8 +222,7 @@ adisk   lda ddev
         bcs @x
         sta ddev
         jsr dcmd
-@x      sec                     ; (said: a key, then the menu)
-        rts
+@x      rts
 
 ; diskkey  a file name typed as $ (the drive's files) or @ alone (its
 ; status and commands): done, c set (ask again); else c clear
@@ -256,8 +248,13 @@ diskkey lda inlen
 quit    jsr print
         lda #$37
         sta $01
+        sei                     ; (RESTOR writes $0314/$0315 a byte at a time)
         jsr $ff8a               ; the KERNAL's vectors again (RESTORE: not
-        jmp ($a002)             ; this program's rti); BASIC's warm start
+        jsr $e453               ; this program's rti), BASIC's own, and its
+        jsr $e3bf               ; zero page: this program kept its pointers
+        jsr $a644               ; where BASIC's are ($2B on), and a LOAD after
+        cli                     ; it went wherever they pointed. NEW, and
+        jmp ($a002)             ; BASIC's warm start
 rtiv    rti
 
 ; look  the screen cleared, its colours and character set the tool's
@@ -286,10 +283,16 @@ mdraw   jsr look
         jsr item
         lda pok
         beq @s0
+        lda prglen              ; (none: a blank screen)
+        beq @sb
         lda prgdev
         ldx #<prglen
         ldy #>prglen
         jsr prfile
+        jmp @s1
+@sb     ldx #<tx_blank
+        ldy #>tx_blank
+        jsr print
         jmp @s1
 @s0     jsr none
 @s1     lda #2                  ; 2 message: its start, as it shows
@@ -372,7 +375,16 @@ mdraw   jsr look
         ldx #<tx_chyes
         ldy #>tx_chyes
 @c8     jsr print
-        ldx #11                 ; the keys
+        lda #9                  ; 9 the sound: the music, or the screech
+        jsr item0
+        ldx #<tx_snmus
+        ldy #>tx_snmus
+        lda snd
+        beq @s9
+        ldx #<tx_snscr
+        ldy #>tx_snscr
+@s9     jsr print
+        ldx #13                 ; the keys (a row on, as SlopLoad 64's)
         ldy #0
         clc
         jsr plot
@@ -408,8 +420,8 @@ item    stx irow
         lda #5                  ; (white for the next)
         sta usedc
         rts
-lablo   byte <tl1,<tl2,<tl3,<tl4,<tl5,<tl6,<tl7,<tl8,<tl9,<tl10,<tl11
-labhi   byte >tl1,>tl2,>tl3,>tl4,>tl5,>tl6,>tl7,>tl8,>tl9,>tl10,>tl11
+lablo   byte <tl1,<tl2,<tl3,<tl4,<tl5,<tl6,<tl7,<tl8,<tl9,<tl10,<tl11,<tl12
+labhi   byte >tl1,>tl2,>tl3,>tl4,>tl5,>tl6,>tl7,>tl8,>tl9,>tl10,>tl11,>tl12
 
 ; used  the next value grey with no message (it doesn't count)
 used    lda #5
@@ -441,18 +453,14 @@ prfile  stx p1
         jmp @c
 @x      rts
 
-; ptitle  line a's name (8: write it, 9: show it) in reverse on row
-; ttlrow, the cursor under it
+; ptitle  the screen cleared, line a's name (10: write it, 11: show it,
+; 12: @ disk) in a light blue bar on the top row, the cursor under it
 ptitle  pha
-        ldx #ttlrow
-        ldy #0
-        clc
-        jsr plot
         ldx #<tx_ttl
         ldy #>tx_ttl
         jsr print
         pla
-        cmp #9
+        cmp #10
         bcs @w
         pha
         ora #'0'
@@ -625,17 +633,11 @@ acols   jsr needmsg
         bcs @x
         jsr needscr
         bcs @x
-@q      ldx #<q_scol
+        lda scoled              ; 1 the screen's, 2 edited (its editor)
+        ldx #<q_scol
         ldy #>q_scol
-        jsr print
-        lda #1
-        jsr readline
-        lda #0
-        ldx inlen
-        beq @set                ; (return: the screen's)
-        lda inbuf
-        cmp #'e'
-        bne @q
+        jsr ask12
+        beq @set
         jsr coledit
         lda #1
 @set    sta scoled
@@ -809,22 +811,30 @@ awrite  jsr needscr
 ; module after it; slopload.py's -then)? Then written at $a000, not
 ; $e000: clear of a picture module's $c000-$ffbf
 ; ------------------------------------------------------------
-achain  ldx #<q_chain
-        ldy #>q_chain
-        jsr print
+achain  lda chmask              ; 1 at $e000, 2 at $a000 (first in a chain)
+        beq @a
         lda #1
-        jsr readline
-        lda #0
-        ldx inlen
+@a      ldx #<q_chain
+        ldy #>q_chain
+        jsr ask12
         beq @s
-        ldx inbuf
-        cpx #'y'
-        bne @s
         lda #$40
 @s      sta chmask
         clc
         rts
 chmask  byte 0                  ; $40: at $a000 (each address's high byte $40 less)
+
+; asound  9: the sound while it loads: the music (if the tape has a tune),
+; or Novaload's screech (the module's flags' bit 2: each byte loaded as
+; voice 1's pitch; a tune then waits for a second module, or is cut off)
+asound  lda snd
+        ldx #<q_snd
+        ldy #>q_snd
+        jsr ask12
+        sta snd
+        clc
+        rts
+snd     byte 0                  ; 1: the screech
 
 ; creloc  the main part moved to $a000 and back (chmask $40; 0: nothing):
 ; the 149 bytes the two builds differ in, PETSCII-Load's addresses' high
@@ -962,7 +972,10 @@ ask     lda prgdev
         ldy #>q_drive
         jsr asknum
         bcs ask
-        cmp #8
+        cmp #0                  ; 0: a blank screen (a scroller alone)
+        bne @dr
+        jmp blank
+@dr     cmp #8
         bcc ask
         cmp #31
         bcs ask
@@ -1010,6 +1023,22 @@ asknum  sta t5
         lda t5
         clc
 @x      rts
+
+; ask12  a choice of two, the question at x/y (it lists them as 1 and
+; 2), the default a (0 or 1): a = 0 or 1 (the default if neither), z set
+; for 0
+ask12   sta t4                  ; (t4: readline takes t6)
+        clc
+        adc #1
+        jsr asknum
+        bcs @d
+        sec
+        sbc #1
+        cmp #2
+        bcc @x
+@d      lda t4
+@x      cmp #0
+        rts
 
 ; ------------------------------------------------------------
 ; rdpet  the .pet file: its header checked, the codes and colours into
@@ -1065,6 +1094,7 @@ rdpet   ldx #<tx_reading
         jsr clrchn
         lda #2
         jsr close
+        jsr colmask
         lda hdr+2               ; the settings: border, background, $d018
         and #15
         sta lmset
@@ -1101,6 +1131,66 @@ rdpet   ldx #<tx_reading
         jsr print
 @bad    sec
         rts
+
+; colmask  the colours' low four bits alone, as tools/petscii.py keeps
+; them (a .pet from an editor that puts more in the byte made another
+; module)
+;   uses: a, x
+colmask ldx #0
+@m      lda lmcol,x
+        and #15
+        sta lmcol,x
+        lda lmcol+$100,x
+        and #15
+        sta lmcol+$100,x
+        lda lmcol+$200,x
+        and #15
+        sta lmcol+$200,x
+        lda lmcol+$2e8,x
+        and #15
+        sta lmcol+$2e8,x
+        inx
+        bne @m
+        rts
+
+; blank  the screen blank, for a scrolling message alone: spaces, white,
+; on a background (and border) asked; the upper case font
+;   out:  c clear
+blank   lda #0
+        ldx #<q_bg
+        ldy #>q_bg
+        jsr asknum
+        bcc @c
+        lda #0
+@c      and #15
+        sta lmset
+        sta lmset+1
+        lda #$f4                ; (upper case: the font at $1000)
+        sta lmset+2
+        lda #0
+        sta lmset+3
+        lda #1                  ; (and the file's header says so: mkset, the
+        sta hdr+4               ; screen shown and the editors read the case
+        ldx #0                  ; there: it was the last .pet's, or lower)
+@f      lda #' '
+        sta lmscr,x
+        sta lmscr+$100,x
+        sta lmscr+$200,x
+        sta lmscr+$2e8,x
+        lda #1
+        sta lmcol,x
+        sta lmcol+$100,x
+        sta lmcol+$200,x
+        sta lmcol+$2e8,x
+        inx
+        bne @f
+        stx prglen              ; (no file)
+        inx                     ; (inlen 1: a screen made, for ascreen)
+        stx inlen
+        clc
+        rts
+q_bg    text "its background colour 0-15 [",0
+tx_blank text "blank",0
 
 ; rd1000  1,000 bytes from the open file to a/x (lo/hi)
 ;   out:  c set if the file ended first; a = the last byte's status
@@ -1353,7 +1443,13 @@ mkset   lda msgn                ; the message, in screen codes already
         beq @f2
         inx
         inx
-@f2     stx lmset+3
+@f2     lda snd                 ; (bit 2 the screech)
+        beq @f3
+        inx
+        inx
+        inx
+        inx
+@f3     stx lmset+3
         lda #24                 ; the scroller's row (24 with none)
         ldx msglen
         beq @r
@@ -2021,7 +2117,6 @@ p2s     cmp #$40
         rts
 
 ; ---- texts ----
-tx_head text "           ",159,"*** ",5,"petscii-lm",159," ***",13,151,"  a petscii screen to a loader module",30,0
 tx_bye  text "bye.",13,0
 tl1     text "screen    ",0
 tl2     text "message   ",0
@@ -2031,31 +2126,35 @@ tl5     text "colours   ",0
 tl6     text "counter   ",0
 tl7     text "font      ",0
 tl8     text "chain     ",0
-tl9     text "write the module",0
-tl10    text "show it",0
-tl11    text "@ disk",0
+tl9     text "sound     ",0
+tl10    text "write the module",0
+tl11    text "show it",0
+tl12    text "@ disk",0
 tx_chno text "no: at $e000",0
 tx_chyes text "first in a chain: at $a000",0
-q_chain text "first in a chain (slopload 64's second",13
-        text "module, a picture's, after it): written",13
-        text "at $a000, clear of the picture? y/n [n] ",0
+q_chain text "where it goes:",13,"  1 at $e000 (on its own)",13
+        text "  2 at $a000: first in a chain, clear",13,"    of a picture after it",13
+        text "    (slopload 64's second module)",13,"which [",0
 tx_pxf  text " pixels a frame",0
 tx_asscr text "as on the screen",0
 tx_edited text "edited",0
 tx_crow text "row ",0
 tx_ccol text ", column ",0
-tx_mkeys text 155,"1-8: change  s: show  @: disk  q: quit",13,"return: write the module",30,0
-tx_ttl  text 154,18," ",0       ; light blue, reverse
+tx_mkeys text 155,"1-9: change  s: show  @: disk  q: quit",13,"return: write the module",30,0
+tx_snmus text "the music (if any)",0
+tx_snscr text "novaload's screech",0
+q_snd   text "the sound while it loads:",13,"  1 the music, if the tape has a tune",13,"  2 novaload's screech: each loaded",13,"    byte played as it comes (a tune",13,"    waits for a second module, or is",13,"    cut off)",13,"which [",0
+tx_ttl  text 147,154,18," ",0   ; cleared; light blue, reverse
 tx_ttle text 146,30,13,0        ; (off, green, the next row)
 tx_anyk text 155,"press any key",30,0
 tx_needs text "choose a screen first (1)",13,0
 tx_needm text "type a message first (2)",13,0
 tx_cntw text "the counter is on the message's rows:",13,"move one of them (3 or 6)",13,0
-q_drive text "drive with the .pet file [",0
+q_drive text "drive with the .pet file (0: a blank",13,"screen, for a message alone) [",0
 q_fdrive text "drive with the font (.64c) [",0
-q_ffile text "its file name ($: files, @: disk, return:",13,"keep it, -: the c64's own)? ",0
+q_ffile text "its file name ($: files, @: disk,",13,"return: keep it, -: the c64's own)? ",0
 tx_fc64 text "the c64's own",0
-tx_fread text "read: choose a screen (1) to see it in it",13,0
+tx_fread text "read: choose a screen (1) to see it in",13,"it",13,0
 tx_fshort text "too short for a font (8 bytes",13,"a character after its address)",13,0
 q_file  text "its file name ($: files, @: disk)? ",0
 q_ddrive text "drive [",0
@@ -2066,7 +2165,7 @@ tx_short text "the file ended early: not a .pet file",13,0
 tx_size text "not a 40 x 25 .pet file",13,0
 tx_case text "its case is neither upper nor lower:",13,"not a .pet file",13,0
 q_out   text "the module's name [",0
-tx_blocks text 13,"choose it in slopload 64 (3: the module)",13,0
+tx_blocks text 13,"choose it in slopload 64: 3, the module",13,0
 tx_edit text "a scrolling message (empty: none)",0
 tx_keys text "type it: it goes in at the cursor.",13,"crsr keys move it, del: the one before,",13,"inst: a space, home: the start,",13,"clr (shift home): all of it gone.",13,"return: done.",0
 tx_of   text " of 200  ",0
@@ -2078,16 +2177,16 @@ tx_clrd text " cleared for it",13,0
 tx_willc text " will be cleared for it",13,0
 tx_why  text "(next to the message it would shake:",13,"its split can come a few lines late",13,"while the loader runs)",13,0
 q_spd   text "its speed, 1-4 pixels a frame [",0
-q_scol  text "its colours (return: as on the screen,",13,"e: edit them)? ",0
+q_scol  text "the message's colours:",13,"  1 as on the screen",13,"  2 edit them",13,"which [",0
 tx_cedit text "the scrolling message's colours: they",13,"stay put, the message moves through",0
 tx_ckeys text "left, right: move   home: column 1",13,"ctrl or c= and 1-8: that colour here",13,"f: every column this one's colour",13,"p: the screen's colours again",13,"return: done",13,13,"(column 0 shows the background: the",13,"message leaves the row there)",0
-q_crow  text "a block counter: its row (return: none)? ",0
-q_ccol  text "its column (its first digit of 3) [",0
+q_crow  text "a block counter's row (return: no)? ",0
+q_ccol  text "its first digit's column [",0
 tx_cntno text "not on the message's rows",13,0
 wold    text ".pet"                 ; (wfile.asm: the name's ending, and the new one)
 wnew    byte 3
         text ".lm"
 
         incasm "petlm.asm"      ; the module (c64build.py)
-msgbuf                          ; the message (msgmax bytes)
-bssend = msgbuf+msgmax
+bssend                          ; (the end: its font at $3800 after it)
+msgbuf = $c000                  ; the message (msgmax bytes, in the free ram)

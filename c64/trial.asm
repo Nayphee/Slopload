@@ -1570,9 +1570,23 @@ trbte   lda tredgy              ; from the edge buffer: the next pc
         lda tredgp
         adc #0
         sta trpch
-        jsr trmapc
-        lda trtb+1
-        jmp trbo
+        lda trtb+1              ; then its offset, and only the page it lands
+        tax                     ; in mapped: the next pc's own may be outside
+        sty trt                 ; the tune (a branch in its last bytes, always
+        clc                     ; taken, was refused as code outside it; a
+        adc trt                 ; paged cut read that page in for nothing)
+        tay
+        txa
+        bmi @b
+        bcc @s
+        inc trpch
+        bcs @m                  ; (always)
+@b      bcs @s
+        dec trpch
+@m      jsr trmapc              ; (into another page than the next pc's: 4
+        jmp trn4                ; cycles, as trbo)
+@s      jsr trmapc              ; (the same: 3)
+        jmp trn3
 
 ; ---- jumps
 tro4c   iny                     ; jmp abs
