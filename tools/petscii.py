@@ -29,9 +29,10 @@ module (modules/petscii, PETSCII-Load).
 -counter ROW,COL a block counter: three digits there (in the screen's
                  colours) counting the program's blocks down to 000 (first
                  in a chain: the next module's blocks)
--screech         Novaload's loading noise: with no tune, voice 1 a sawtooth
-                 whose pitch is each byte of the program as it loads (a
-                 tune, if the tape has one, plays instead)
+-screech         Novaload's loading noise: voice 1 a sawtooth whose pitch
+                 is each byte of the program as it loads. It has the SID:
+                 a tune on the tape doesn't play beside it (one playing
+                 already is cut off when the screen starts)
 -chain           the module's main part at $A000, not $E000: for a chain
                  (slopload.py -module A -then B), where the other module,
                  a picture's, is at $C000-$FFBF (the PC tool does this by

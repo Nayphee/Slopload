@@ -299,7 +299,10 @@ which keeps the core's layout: the prologue's store becomes `bit $d020`
 (as `fstr`'s operand, so the final phase doesn't turn stripes back on),
 and `errshow` becomes `bflat`, `ldx ld_seq` (the block's number: a
 colour a block) or `ldx #colour` (the tool's patch), red on a tape
-error, then `bset` after the core's end, which stores X only when the
+error (pink when that colour is red itself: a border of solid red is
+the user's to choose, and the error must still show; `errshow`'s 19
+bytes are all used for it, `bset` in a branch's reach), then `bset`
+after the core's end, which stores X only when the
 border differs: on the 8565 (a C64C, VICE's default) every write to a
 colour register leaves a grey dot on the border, so a store each time
 round the wait would show. The border changes where `errshow` ran, in
@@ -308,6 +311,10 @@ interrupt, so it costs nothing. 33 bytes differ from the core
 (`tools/build.py`'s `flat_check` asserts where). Stage 1 is held at the
 mode's colour (a style's first) for every mode but rainbow: its
 `stx $d020` (`s1str`) becomes `bit`, and `s1bc` stores the colour once.
+Where that colour is red, its tape error (`s1bad`, `lda #2` as built)
+becomes `lda #10`, pink: the border is one colour then, so red on red
+would show nothing (`slopload.py`, `c64model.py` and SlopLoad 64's
+`mkhead`, with `cs1er`, the same byte).
 
 ## 7. Memory
 
@@ -1059,9 +1066,9 @@ for edge (a cassette recording).
 **The menu** (`ui.asm`) is drawn whole on a cleared screen each time:
 the title, the machine (`machine.asm`: the CPU, PAL or NTSC from the
 raster's last line, the expansion memory), lines 1-9 one a row. A
-number writes that line's name in reverse under the menu and asks its
-questions below it; "press any key" then clears the screen and draws the
-menu again. Answers are read key by key with GETIN (`io.asm`'s
+number clears the screen, writes that line's number and name at its
+top and asks its questions under it; the menu is drawn again after
+them (after "press any key", where something was said). Answers are read key by key with GETIN (`io.asm`'s
 `readline`, with a cursor of its own and DEL): the KERNAL's screen
 editor would read the whole screen line, and anything an earlier message
 left on it came back as part of the answer. The name on tape is read by
@@ -1089,7 +1096,7 @@ of the 101), so they move with it. With a module or a picture showing,
 every pulse is then 212 cycles or more (`coding.asm`'s second row of
 first h: 108, 72, 56).
 
-**No stripes** (black, block, one colour) need `core_flat`, which has
+**No stripes** (block, one colour) need `core_flat`, which has
 the core's layout: its 33 differing bytes go in `payload.asm` as
 (offset, xor) lists. `corefl` xors them into coreb and `corefd`, at the
 start of every `mkcore`, xors them back, the same list both ways; so
@@ -1099,18 +1106,27 @@ makes the core in one mode after another and checks each). Stage 1
 gets the PC tool's two patches.
 
 **Colours and effect: two lines, one mode.** Line 7 picks the colours
-(`opt_pal`: a style, rainbow to black, or your own, `ownl`: a count and
+(`opt_pal`: a style, rainbow to candy, or your own, `ownl`: a count and
 1-12 colours, typed as `6,14,3` and parsed by `ownin`), line 8 the
-effect (`opt_eff`: standard, the seven of `slopload.py`'s FX, block).
+effect (`opt_eff`, its number in the list: 0 none, 1 classic, 2 sloppy,
+3-8 the other six of `slopload.py`'s FX, 9 block; sloppy, SlopLoad's
+own stripes, is what it starts with).
 `lnset` turns the two into the one mode the plan and the coder read
 (`opt_lines`, with `opt_fcol`, `opt_fx`, `opt_fxb`), as
-`c64model.lines_for()` does: standard draws a style's own number (black
-is `st_black`), your own of one colour `st_one`, of more `st_own` (a
+`c64model.lines_for()` does: none is `st_one` with the colours' first
+(`stcol` of timer value 0: a style's, your own's, rainbow's black), so
+a plain border needs no list of one colour, and no black palette (the
+PC tool's `black` is left out of SlopLoad 64's styles, `c64model.STYLES`:
+every use of it was rainbow with no effect, or rainbow under an
+effect); sloppy draws a style's own number,
+your own of one colour `st_one`, of more `st_own` (a
 table style whose list is `ownl`: `stcol` reads it there instead of
 from the cassette buffer); an effect starts from the colours' first
 (rainbow's: 0, the PC tool's default); block is `st_block`. It also
-switches the cycle off where it can't go, so the two lines can be set
-in either order.
+switches the cycle off where it can't go (`cycok`: it goes with a plain
+border, and with the effects it shows under, `fxcyc`: thin, eor and
+line; the others change the border with every pulse), so the two
+lines can be set in either order.
 
 **The effect's 10 bytes.** `line` (`LDA #N : STA $D020 : LDA #B : STA
 $D020`) needs two loads and two stores in the interrupt, where only A is
@@ -1132,7 +1148,23 @@ the core to coreb, the patch to $033C, the NMI's rti, `detect`, and
 `dibsum`, each byte's bit pairs summed, built in the page at $C600 that
 the REU's sizing borrows first) sits after the payload, in what becomes
 the buffers. The @ line (`adisk`, `dirshow`: the directory and the
-command channel, through `dstat`'s) fitted in what that freed.
+command channel, through `dstat`'s) fitted in what that freed. So did
+line 8's colours (`effsw`: each effect's run of colours from line 7's
+first, `effn` a table of their lengths, sloppy's by `prswatch`, and,
+ora, eor and line's by the value; `pcell` a cell, black a dark grey
+check) when `detect` and its parts moved there too: `machdet.asm`,
+split from `machine.asm`, after `startup` in SlopLoad 64 (about 440
+bytes; the TAP writer and SID-SLM keep it after `machine.asm`).
+Nothing the tool needs after its start may be there (from `bss`, the
+core's place in the payload, on): the first tape fills those buffers.
+From 0.14.0 to 0.15.2 the menu's title was (`tx_head`, made by the
+build with the release's number and put last in `payload.asm`), in
+what becomes the KERNAL header's second copy, `romh2`: once a tape had
+been made the menu printed that block's pulses for its title, to the
+next zero byte, control codes among them. `tools/c64build.py` puts it
+before the core and stops the build if any label but the start's own
+and the buffers' is at `bss` or after; `tests/c64tool.py` wants the
+menu after every tape as it was before it.
 
 **Drives.** Every file can be on a drive of its own. A drive's status
 is read on its command channel, and closing that channel closes every
@@ -1311,3 +1343,42 @@ halves worked out (2,048 cycles at least; the low half c/2, or 32,768
 from 131,072 on), then the rest of its high half in chunks of up to
 32,768 cycles with the line left high, then its low half. A 3-second
 pause is about 90 chunks.
+
+## 13. PETSCII-ED
+
+A PETSCII screen editor (`c64/petsciied.asm`, with the tools' shared
+`io.asm`, `disk.asm` and `wfile.asm`; its title line `peted.asm`, made
+by `tools/c64build.py`), for the `.pet` files PETSCII-LM takes.
+
+**Memory.** The program from $0801 (6 KB), a `.pet` read into a buffer
+after it first (2,000 bytes: a file that is refused leaves the screen
+as it was), the font at $3800-$3FFF (`$D018` $1E in VIC bank 0, as
+PETSCII-LM's), the screen's codes at $4000 and colours at $4400. The
+build stops if the buffer reaches the font.
+
+**The editor** draws the screen on the C64's own ($0400, colour RAM)
+and takes it back when it goes to the menu or to the characters (F1),
+so the menu and the 256 characters can use the screen between. Keys are
+read with GETIN, never through the screen editor: the KERNAL's cursor
+is off (`$CC` not 0) and C= with SHIFT doesn't change the case (`$0291`
+$80; set back on quitting), and the cursor is the editor's own: the
+cell's character reversed in the pen's colour, by turns with the cell
+as it is, every 16 frames of the jiffy clock. Before any key is acted on
+the cell is put back (`curoff`), so what is read back or written is
+never the cursor. A key is one of the editor's (a table of 18 codes and
+their actions), a colour key (CTRL or C= with 1-8, the sixteen codes
+PETSCII-LM's colour editor knows), or a character ($20-$7F, $A0-$FF,
+made a screen code as PETSCII-LM's `p2s` does, $80 added with reverse
+on). The 256 characters fill rows 4-19, columns 12-27; the rest of the
+screen is spaces in the background's colour, so nothing else shows
+whatever the font's space is, and the one chosen blinks between its
+colour and the background's. No text is drawn there: in a font of its
+own it couldn't be read.
+
+**Files.** A `.pet` is read as PETSCII-LM reads one (40 x 25, a case of
+0 or 1, the colours' low four bits) and written as the PC's
+`tools/petscii.py` reads one: 40, 25, border, background, case, the
+codes, the colours. The drive asked for a file becomes the screen's (or
+the font's) only once the file is read or written, so RETURN alone at
+a name keeps both. A font is read as PETSCII-LM reads one, so the editor
+shows what the module will.

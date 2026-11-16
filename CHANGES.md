@@ -1,5 +1,154 @@
 # SlopLoad releases
 
+## 0.17.0 (2026-11-16)
+
+A PETSCII screen editor joins the C64 tools: PETSCII-ED, on both disks.
+SlopLoad 64's effect list shows the colours each effect would draw with
+line 7's, its line 1 lists the drive's files with `$`, and a tape error
+in the loader's first second shows pink on a red border too. Both
+suites pass in VICE on the changed build (284 PC cases, 117 SlopLoad 64
+cases); PETSCII-ED's test passes on PAL, NTSC and a C128. Not played on
+a real C64.
+
+**PETSCII-ED, a PETSCII screen editor, on the disks.** It reads and
+writes `.pet` files (the screens PETSCII-LM makes into modules, as
+Petmate exports them) and shows a screen in a font of your own, to try
+one first. A menu in the other tools' style: the screen (a file, or a
+new blank one), its border and background, the pen (the colour typed
+in), the case, a font (a `.64c`). RETURN edits the screen, the whole
+C64 screen as it will show: the keys type as on the C64 (SHIFT and C=
+for the graphics, CTRL 9 and 0 for reverse, CTRL or C= with 1-8 for the
+pen's colour), F1 shows all 256 characters to choose one from (in the
+font: the way to find a new font's characters), F3 colours the one
+under the cursor, F5 takes its colour for the pen, F2, F4 and F6 step
+the border, the background and the case on. W writes it (the drive and
+the name asked), Q quits, asked first if the screen isn't written. 6,159
+bytes (25 blocks; the d64 has 35 free). `tests/petsciied.py` works it
+through the keyboard in VICE, every step's screen against a model of
+the editor, and reads the file it writes back: three new cases in the
+PC suite (284), PAL, NTSC and a C128.
+
+**SlopLoad 64: each effect's colours, and the directory at line 1.**
+Line 8's list keeps its few words on each effect and shows, on the row
+under them, the colours it would draw with line 7's as they are: no
+effect the first; classic and mixed every colour from it; sloppy line
+7's by the pulse's length; thin it and the next; and and ora the
+colours the value lets through; eor it and it eor the value; line the
+border and the line's colour; block all sixteen (and, ora, eor and
+line say the value: `VALUE 5`). Black, which wouldn't show on the
+black screen, is a dark grey check, on line 7's colours too. At line
+1's file name, `$` lists the drive's files and asks again (`@` alone:
+its status and commands), as the other tools' file questions do; and
+a new drive with RETURN alone at the name no longer moves the program
+there is to that drive (it was read from the old one, and mastering
+would have looked on the new). The room for it: the machine's
+detection, run once at the start, moved where the buffers go
+(`machdet.asm`), about 440 bytes; SlopLoad 64 has 274 to spare.
+`tests/c64tool.py` checks the list's words and colours each time it
+opens line 8 (in every case of SlopLoad 64's suite that sets an
+effect), and `--dirfirst` types `$` at line 1 first: a new case (117).
+
+**A tape error in the first second, on red.** In a tape's first
+seconds stage 1 loads the loader, the border one colour in every
+style but rainbow (the style's first). Its tape error was red, so
+where that colour is red (`-stripes 2`, `red`, `fire`, an effect from
+red) an error there showed nothing. It is pink there now, as the
+loader's own is on a solid red border. `slopload.py`, the model and
+SlopLoad 64 change the same byte in the KERNAL header (SlopLoad 64 9
+bytes longer: 94 to spare); every other tape is as it was.
+`tests/retrytest.py --stage1` damages the loader's own block and wants
+stage 1's error in the colour given and a full load after: four new
+PC cases (281), red, fire, blue and rainbow, and one in SlopLoad 64's
+suite (116), thin from red, its tape the model's.
+
+## 0.16.0 (2026-11-16)
+
+SlopLoad 64's menu comes back whole after a tape, which it has not
+since 0.14.0; its effect line starts at 0 NO EFFECT, with CLASSIC 1
+and SLOPPY 2; a tape error shows pink where the border is solid red;
+and the disks have a mock of Novaload's boot screen, `SERIAL.PET`.
+The README was checked against the code, section by section, and
+about sixty statements put right (what `-wait` and `-waitgame` do,
+when the tune starts, what is on the disks, the messages, the
+tests' options). Both suites pass in VICE on the changed build (277
+PC cases, 115 SlopLoad 64 cases, each of those now checking the menu
+after its tape). The menu's damage was seen on an Ultimate 64
+before the fix; nothing else was played on a real C64.
+
+**SlopLoad 64's menu after a tape.** Since 0.14.0 the menu came back
+damaged once a tape had been made, any tape: reversed letters where
+its title was and across the screen, lines 1 and 2 in reverse, the
+machine's line at the bottom. The tape itself was right, and so were
+the settings; only the screen was wrong. The title's text (it has the
+release's number, so the build has made it since 0.14.0) had been put
+last in the program, after the loader's core, where the tool's
+buffers go once it has started: every tape fills them with the
+KERNAL header's pulses, and the menu printed those for a title,
+control codes and all. Seen on an Ultimate 64 after a 51 KB
+program's tape, and then in VICE after any. The title is before the
+core now, and the build stops if anything but the start's own code
+and data is where the buffers go. `tests/c64tool.py` presses a key
+after every tape and wants the menu back as it was before it, so
+every case of SlopLoad 64's suite checks it. (The buffers start 31
+bytes later for it: 103 bytes to spare.)
+
+**SlopLoad 64's effect line: 0 NO EFFECT, 1 CLASSIC, 2 SLOPPY.** Line
+8 chooses by the number shown, from 0. 0, no effect, is a plain border
+in line 7's first colour (a palette's, your own's, rainbow's black),
+with no lines: until now that took a list of one colour on line 7.
+Classic is 1, and SlopLoad's own stripes, which were 1 standard, are 2
+sloppy: still what it starts with, and the same tapes. Thin to line
+are 3-8, block 9. Three new cases in SlopLoad 64's suite (115), its
+tapes the model's, one loaded.
+
+With that, two things on lines 7 and 8 said nothing new, and are gone.
+The **BLACK palette** (line 7): with sloppy it was rainbow with no
+effect, a plain black border, and under any effect it was rainbow
+under that effect, both starting from black. (The PC tool keeps
+`-stripes black`.) And the question **a colour on each page loaded?**
+is asked only where the step shows: a plain border (no effect, or one
+colour), thin, eor, and line's own (a colour on each block). Classic,
+mixed, and and ora change the border with every pulse, so there it
+only made the shortest pulses longer.
+
+**A tape error on a red border is pink.** A tape error turns the
+border red until the loader recovers, which said nothing where the
+border was red already. Two places can be: a border of one colour
+(`-stripes 2`; SlopLoad 64's one colour) and a PETSCII screen with a
+red border. Both show pink (light red, 10) there now, and red as
+before on any other colour; with `-stripes block`, a red block's own
+turn shows pink too. The loader's part fits in the bytes it had (the
+flat core's `errshow`, 19 bytes, its padding used: the core is no
+longer), so SlopLoad 64 is the same size; PETSCII-Load showed white
+on a red border before, and is 4 bytes shorter. The effects (`thin,2`
+and the like) are as they were: their lines stop and the border is
+red, on a border that was red with lines. So is the first second of a
+tape, while the loader itself loads (stage 1): an error there on a
+solid red border still shows red, which is no sign.
+
+`tests/retrytest.py` reads the border as the error is flagged, while
+it is, and a block after it cleared (`--stripes`, `--border`,
+`--expect`), and runs the flat core's `errshow` in the simulator for
+every block number: five new cases in the PC suite (277).
+
+**A Novaload-style boot screen to try: `SERIAL.PET`.** A mock of the
+screen a Novaload tape shows once its first program is RUN and the
+screech begins, taken from Spy Hunter's (Kixx) in VICE at the screech's
+first byte: a black border, a dark grey screen, the tape's name in
+white on row 8, `NOVALOAD A100222` in light grey on row 23 (columns
+12-27), and nothing else. Ours says `SLOPLOAD A000000` (a serial
+number of zeros in Novaload's form, a letter and six digits), and
+`1234567890123456` stands where the name goes: its 16 characters,
+centred, over the bottom line's 16. `modules/petscii/serial.pet`
+(written by `mkserial.py` beside it) for the PC tool, and `SERIAL.PET`
+on both disks for PETSCII-LM: with the screech (`-screech`,
+PETSCII-LM's line 9) it is Novaload's start, sound and all. The d64
+has 60 blocks free with it.
+
+PETSCII-Load shows it as the file has it on PAL, NTSC and a C128, and
+with the screech; PETSCII-LM reads it from the d64 and the d81, and
+the `SERIAL.LM` it writes is the PC tool's, byte for byte.
+
 ## 0.15.2 (2026-11-14)
 
 One fix: the loading sprites under a program that loads over their

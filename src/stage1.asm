@@ -155,7 +155,8 @@ s1dst   = *
         jsr s1getb
         cmp ld_chk
         beq core
-s1bad   lda #2                  ; red: rewind a little, press play
+s1bad   lda #2                  ; red: rewind a little, press play (the tool:
+                                ; pink, 10, where its border is red, s1bc's 2)
         sta $d020
         bne s1again             ; (always)
 s1rti   rti                     ; (the nmi that locks RESTORE out)

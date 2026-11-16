@@ -37,6 +37,7 @@ DEMOS = [(os.path.join(BUILD, 'modules', 'flappy.lm'), 'flappy-load.lm'),
          (os.path.join(BUILD, 'modules', 'ozgold.lm'), 'ozgold.lm'),
          (os.path.join(BUILD, 'modules', 'petscii.lm'), 'petscii.lm'),
          (os.path.join(ROOT, 'modules', 'petscii', 'demo.pet'), 'demo.pet'),
+         (os.path.join(ROOT, 'modules', 'petscii', 'serial.pet'), 'serial.pet'),     # (a mock of Novaload's boot screen)
          (os.path.join(ROOT, 'pictures', 'slopload.koa'), 'slopload.koa'),
          (os.path.join(ROOT, 'pictures', 'cassette.spr'), 'cassette.spr'),     # (a loading sprite: PICTURE-LM's 2)
          (os.path.join(ROOT, 'music', 'build', 'slopload.sid'), 'slopload.sid'),
@@ -85,7 +86,10 @@ def lohi(name, vals):
 
 
 # SlopLoad 64's effect list: a few words on each (26 characters at most; kept short: room)
-EFF_SAYS = {'standard': "line 7's colours", 'classic': "colour +1 a pulse",
+
+
+# SlopLoad 64's effect list: a few words on each (26 characters at most; kept short: room)
+EFF_SAYS = {'no effect': "line 7's first colour", 'sloppy': "line 7's colours", 'classic': "colour +1 a pulse",
             'thin': "thin lines", 'mixed': "classic and thin",
             'and': "colour and value", 'ora': "colour or value",
             'eor': "colour eor value", 'line': "lines of one colour",
@@ -166,15 +170,19 @@ def payload():
             f"chainat = ${sw['addr']:04x}", f"swlen = {len(sw['data'])}", f"swvec = {cl['cafr'] - sw['addr']}",
             f"swframe = ${sw['cframe']:04x}", f"swstop = ${sw['cstop']:04x}"]
     out += asm_bytes("pl_sw", sw['data'])
+    # (here, before the core: from pl_core on the buffers go, and what is
+    # there is gone once a tape has been made. It was after pl_c2 from
+    # 0.14.0 to 0.15.2: the menu came back with the KERNAL header's
+    # symbols printed for its title)
+    t = f"*** slopload {version()} ***"             # the menu's top line, centred
+    out += ["", "; the menu's top line: the release (VERSION)",
+            f'tx_head text 147,5,"{" " * ((40 - len(t)) // 2)}",159,"*** ",5,"slopload {version()}",159,'
+            '" ***",13,152,0']
     out += ["", "; stage 1's data block, its header part, the core"]
     out += asm_bytes("pl_s1blk", blk) + asm_bytes("pl_s1hdr", hpart) + asm_bytes("pl_core", core)
     out += ["", "; core_stripes' patch: copied to c2ins at the start (after the core,",
             "; where the buffers go)"]
     out += asm_bytes("pl_c2", c2data) + [f"c2n = {len(c2data)}"]
-    t = f"*** slopload {version()} ***"             # the menu's top line, centred
-    out += ["", "; the menu's top line: the release (VERSION)",
-            f'tx_head text 147,5,"{" " * ((40 - len(t)) // 2)}",159,"*** ",5,"slopload {version()}",159,'
-            '" ***",13,152,0']
     open(os.path.join(C64, 'payload.asm'), 'w').write('\n'.join(out) + '\n')
 
 
@@ -222,7 +230,7 @@ def stripes_patch(cs):
             g -= 63
         packed.append(g << 2 | codes[d])
         last = i
-    names = list(S.STRIPES)
+    names = list(M.STYLES)                  # (SlopLoad 64's: the PC tool's but black)
     assert names[0] == 'rainbow' and S.STRIPES['rainbow'] is None
     # then the styles' colour lists (count, colours; rainbow none: the
     # timer value itself) and their addresses, in the same block
@@ -244,16 +252,15 @@ def stripes_patch(cs):
            "c2d = c2ins + 3                 ; deltas, from pl_c2 at the start)",
            f"stclo = ${stab_at:04x}                   ; (the styles' colour lists' addresses)",
            f"stchi = ${stab_at + len(names):04x}"]
-    # the styles with no stripes after the table's (core_flat): black (the
-    # table's last, one colour), then a colour a block, one colour (your
-    # own, of one), an effect, and your own colours (a list in ownl)
-    assert names[-1] == 'black' and S.stripe_mode('black') == ('flat', 0)
-    assert all(S.stripe_mode(n)[0] == 'table' for n in names[1:-1])
+    # after the table's styles, those with no stripes (core_flat): a
+    # colour a block, one colour (your own, of one, or no effect: the
+    # colours' first), then an effect, and your own colours (a list in ownl)
+    assert all(S.stripe_mode(n)[0] == 'table' for n in names[1:])
     # the palettes on SlopLoad 64's colours line (stn: their names): the
     # styles, then your own
     pals = names + ['your own']
-    out += [f"nstyles = {len(names)}                    ; (with a colour list: rainbow to black)",
-            f"st_black = {len(names) - 1}", f"st_block = {len(names)}", f"st_one = {len(names) + 1}",
+    out += [f"nstyles = {len(names)}                    ; (with a colour list: rainbow to candy)",
+            f"st_block = {len(names)}", f"st_one = {len(names) + 1}",
             f"st_fx = {len(names) + 2}                     ; (an effect: opt_fx, core_fx)",
             f"st_own = {len(names) + 3}                    ; (your own colours: ownl)",
             f"npal = {len(pals)}                       ; (the palettes: the styles, your own)"]
@@ -281,11 +288,14 @@ def flat_patch(cs):
     assert not fields & {i for i, _ in diff}, "core_flat: a patched field is one it changes"
     assert len(b) <= 1024 and len(diff) < 256
     ss = S.sym('stage1')
+    s1h = open(os.path.join(BUILD, 'stage1_header.bin'), 'rb').read()
+    assert s1h[ss['s1bad'] - 0x0351:ss['s1bad'] - 0x0351 + 2] == bytes([0xa9, 2]), "stage 1's s1bad: lda #2"
     return (["", "; core_flat from the core: its differing bytes (offset low, high; xor)",
              f"nfl = {len(diff)}", f"cbflat = {sf['bflat'] - 0x400}             ; ldx ld_seq, or ldx #colour",
              f"cldseq = ${sf['ld_seq']:02x}              ; (the loader's ld_seq: the block's number)",
              f"cs1str = {ss['s1str'] - ss['s1lo']}             ; stage 1: its border store (in its block),",
-             f"cs1bc = {ss['s1bc'] + 1 - 0x0351}               ; its border's colour (in the header part)"]
+             f"cs1bc = {ss['s1bc'] + 1 - 0x0351}               ; its border's colour (in the header part)",
+             f"cs1er = {ss['s1bad'] + 1 - 0x0351}              ; its tape error's colour (2; 10 on red)"]
             + asm_bytes('flo', [i & 255 for i, _ in diff]) + asm_bytes('fhi', [i >> 8 for i, _ in diff])
             + asm_bytes('fxr', [x for _, x in diff]))
 
@@ -348,20 +358,26 @@ def fx_patch(cs):
             f"cfxslo = {(0x400 + p1) & 255}             ; (the effect's first byte's low byte)"]
     out += asm_bytes('fxcost', [S.FX[n] for n in names] + [0])
     out += asm_bytes('fxval', [f['vat'] for f in fxs])     # (the value's byte; 0: none)
+    out += asm_bytes('fxcyc', [int(n in M.CYCLE_FX) for n in names])   # (1: the cycle shows under it)
     out += asm_bytes('fxcof', [f['cat'] for f in fxs])     # (line: its border's colour's byte; 0: none)
     out += asm_bytes('fxtpl', [b for f in fxs for b in f['code']])      # (10 a piece)
     out += asm_bytes('fxpa', [f['pa'] for f in fxs]) + asm_bytes('fxpb', [f['pb'] for f in fxs])
     out += asm_bytes('fxa1v', [f['a'][0] for f in fxs]) + asm_bytes('fxb1v', [f['b'][0] for f in fxs])
     out += asm_bytes('fxa0v', [f['a'][1] for f in fxs]) + asm_bytes('fxb0v', [f['b'][1] for f in fxs])
-    # SlopLoad 64's effect line (effn: their names): standard (the
-    # colours as stripes), the effects, then a colour a block
-    effs = ['standard'] + names + ['block']
+    # SlopLoad 64's effect line (effn: their names, each its number in
+    # the list): none (a plain border), classic, sloppy (the colours as
+    # stripes: SlopLoad's own), the other effects, then a colour a block.
+    # (ui.asm takes an effect's value from its number less 2: sloppy's
+    # is then classic's place, which must have none)
+    assert names[0] == 'classic' and fxs[0]['vat'] == 0 and fxs[0]['cat'] == 0
+    effs = ['no effect', names[0], 'sloppy'] + names[1:] + ['block']
     out.append(f"neff = {len(effs)}")
     for k, n in enumerate(effs):
         out.append(f"effn{k} text \"{n}\",0")
     out.append("effnlo byte " + ','.join(f"<effn{k}" for k in range(len(effs))))
     out.append("effnhi byte " + ','.join(f">effn{k}" for k in range(len(effs))))
-    # ... and a few words on each, beside it in the list (grey)
+    # ... and a few words on each, beside it in the list (grey; its colours
+    # on the row under them)
     for k, n in enumerate(effs):
         out.append(f"effd{k} text 155,\"{EFF_SAYS[n]}\",5,0")
     out.append("effdlo byte " + ','.join(f"<effd{k}" for k in range(len(effs))))
@@ -395,6 +411,16 @@ def main():
     end = org + len(data)
     print(f"slopload64  ${org:04X}-${end - 1:04X}  {len(data)} bytes; buffers to ${labs['bssend']:04X},"
           f" the music pool to ${labs['mpoolend'] - 1:04X}")
+    # from bss on the program's own bytes are the buffers' once it has
+    # started: only what the start alone uses may be there
+    once = {'bss', 'pl_core', 'pl_c2', 'startup', 'rtivs', 'detect', 'srdet', 'reudet', 'reu1'}   # (machdet.asm's)
+    bufs = {'romh1', 'romh2', 'romd1', 'romd2', 'blkb', 'btab', 'bal', 'bah', 'bll', 'blh', 'bsrc', 'bpl', 'bph',
+            'bfl', 'bset', 'bprog', 'bh', 'bm', 'bpf', 'bk', 'bssend'}
+    lost = sorted(k for k, v in labs.items() if isinstance(v, int) and labs['bss'] <= v < end
+                  and k not in once | bufs and k.split('@')[0] not in once)
+    if lost:
+        raise SystemExit(f"slopload64: {', '.join(lost)} where the buffers go (from bss, ${labs['bss']:04X}):"
+                         " gone once a tape has been made")
     if labs['mpoolend'] > 0xa000:
         raise SystemExit(f"slopload64: the music pool runs past $9fff (by {labs['mpoolend'] - 0xa000} bytes)")
     assert labs['bhdr'] - labs['bsave'] == labs['gorig'] + 9 - labs['gnp'], "chain.asm: bsave isn't gnp-gorig's size"
@@ -518,17 +544,30 @@ def main():
     pm = os.path.join(BUILD, 'picture-lm.prg')
     open(pm, 'wb').write(bytes([1, 8]) + bytes(data))
     print(f"picture-lm  ${org:04X}-${org + len(data) - 1:04X}  {len(data)} bytes")
+    # PETSCII-ED (a PETSCII screen editor: .pet files, a font to try)
+    open(os.path.join(C64, 'peted.asm'), 'w').write(
+        "; generated by tools/c64build.py - do not edit\n; the top lines: the release\n"
+        + head_line('petscii-ed', 'a petscii screen editor', 30) + "\n")
+    org, data, labs = B.assemble(os.path.join(C64, 'petsciied.asm'), 'petsciied', {})
+    assert org == 0x0801, hex(org)
+    if labs['bssend'] > labs['fontbuf']:
+        raise SystemExit(f"petscii-ed: runs to ${labs['bssend'] - 1:04X}, into its font at ${labs['fontbuf']:04X}")
+    pe = os.path.join(BUILD, 'petscii-ed.prg')
+    open(pe, 'wb').write(bytes([1, 8]) + bytes(data))
+    print(f"petscii-ed  ${org:04X}-${org + len(data) - 1:04X}  {len(data)} bytes; buffers to ${labs['bssend']:04X},"
+          f" its font ${labs['fontbuf']:04X}")
     demo_slm()
     for img, kind in (('slopload64.d64', 'd64'), ('slopload64.d81', 'd81')):
         path = os.path.join(BUILD, img)
         if os.path.exists(path):
             os.remove(path)
         cmd = [C1541, '-format', f'slopload {version()},sl', kind, path, '-write', prg, 'slopload64', '-write', tw, 'tapwriter',
-               '-write', pl, 'petscii-lm', '-write', ss, 'sid-slm', '-write', pm, 'picture-lm']
+               '-write', pl, 'petscii-lm', '-write', ss, 'sid-slm', '-write', pm, 'picture-lm',
+               '-write', pe, 'petscii-ed']
         for src, name in DEMOS:
             cmd += ['-write', src, name]
         subprocess.run(cmd, check=True, capture_output=True)
-    print("  build/slopload64.d64, build/slopload64.d81 (with tapwriter, petscii-lm, sid-slm, picture-lm, "
+    print("  build/slopload64.d64, build/slopload64.d81 (with tapwriter, petscii-lm, sid-slm, picture-lm, petscii-ed, "
           + ', '.join(n for _, n in DEMOS) + ")")
 
 

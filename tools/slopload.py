@@ -20,7 +20,8 @@ Options (only the ones that differ from the defaults are needed):
                      e.g. "{clr}{white}MY GAME" ({name} or {n}, n a code)
   -module FILE|none  what runs while it loads: a module's .lm (the demos:
                      build/modules/flappy.lm, crossy.lm, squeeze.lm,
-                     template.lm, ozgold.lm, petscii.lm), a module's .prg
+                     rubble.lm, bounce.lm, template.lm, ozgold.lm,
+                     petscii.lm), a module's .prg
                      with its .parts.json beside it, a PETSCII screen
                      (.pet, .petmate or Marq's .c: shown while it loads),
                      a picture in one of picturelm.py's formats (Koala,
@@ -132,8 +133,9 @@ Options (only the ones that differ from the defaults are needed):
   -status VAL        $01 value for -start (default 0x37)
   -stripes STYLE     the border's loading lines: rainbow (default), a
                      style, colours, black, block, or an effect: classic,
-                     thin, mixed, and:N, ora:N, eor:N (,B: its colour to
-                     start from); -showstripes: on through the show too
+                     thin, mixed, and:N, ora:N, eor:N, line:N (,B: its
+                     colour to start from; line: the border's);
+                     -showstripes: on through the show too
   -cycle             the border's colour one on with every 256 bytes
                      loaded, under an effect or one colour (-stripes
                      thin, eor:N, black, 6 ...): 3 cycles a pulse
@@ -588,7 +590,8 @@ def find_game(spec, o=None, chain=False, parts=None):
         path = spec
         if not os.path.isfile(path):
             raise Fail(f"no file {spec}: -module takes a module's file (a .lm; the demos are"
-                       " build/modules/flappy.lm, crossy.lm, template.lm, ozgold.lm and petscii.lm),"
+                       " build/modules/flappy.lm, crossy.lm, squeeze.lm, rubble.lm, bounce.lm, template.lm,"
+                       " ozgold.lm and petscii.lm),"
                        " a PETSCII screen, or none")
         addr, data = load_prg(path)
         extra = None
@@ -1303,6 +1306,8 @@ def master(prg, tap, o, quiet=False):
     if smode != 'rainbow':                        # stage 1: one colour, not the timer's
         block[ss['s1str'] - s1lo] = 0x2c
         hpart[ss['s1bc'] + 1 - 0x0351] = scol
+        if scol == 2:                             # (its tape error red on red: pink, as
+            hpart[ss['s1bad'] + 1 - 0x0351] = 10  # the core's on a red border)
     hpart = bytes(hpart)
     header = bytes([3, s1lo & 255, s1lo >> 8, 0x04, 0x03]) + petscii_name(name) + hpart
     header += bytes([0x20]) * (192 - len(header))
@@ -1622,9 +1627,10 @@ def master(prg, tap, o, quiet=False):
               f" shortest pulses {CYCLE_COST} cycles longer")
     if o.get('showstripes'):
         print("  the loading lines go on in the border while the module or show runs (it leaves the border"
-              " alone; a tape error turns it red)")
+              f" alone; a tape error turns it {'pink' if smode == 'flat' and scol == 2 else 'red'})")
     elif smode == 'flat':
-        print(f"  border: colour {scol} all through, no stripes (red after a tape error)")
+        print(f"  border: colour {scol} all through, no stripes ({'pink' if scol == 2 else 'red'}"
+              f" after a tape error{': red is its own colour' if scol == 2 else ''})")
     elif smode == 'block':
         print("  border: a colour a block (its number, through all 16), no stripes")
     print(f"  bootspeed {o['bootspeed']}: margin at least +-{h_boot} cycles with the screen off;"

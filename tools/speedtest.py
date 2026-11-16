@@ -19,8 +19,8 @@ measured on the deck; each file's name carries its mode
 Record it to a cassette (a TAPuino or an Ultimate writes the .tap; a PC
 plays the .wav into the deck's record input), then on the C64 LOAD each
 file in turn: LOAD alone takes the next one, LOAD"SPEED 7" a given one.
-Each loads with Flappy-Load running (unless -show none) and, when it
-starts (SPACE, or the bird crashing), checks its own bytes: PASS on a
+Each loads with Flappy-Load running (unless -show none) and, as soon as
+it is in, starts by itself and checks its own bytes: PASS on a
 green border, FAIL on a red one. A
 "TAPE ERROR" on the game's status line is a fail for that speed too.
 The fastest speed that passes every time, with some to spare, is the

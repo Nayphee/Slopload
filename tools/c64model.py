@@ -60,22 +60,37 @@ SHOWS = ('none', 'module', 'music')
 # SlopLoad 64's colours line (its palettes: the styles, then your own),
 # its effect line, and the loading-line modes they make (its opt_lines:
 # payload.asm's st_ numbers, in this order)
-PALETTES = list(S.STRIPES) + ['your own']
-EFFECTS = ['standard'] + list(S.FX) + ['block']
-MODES = list(S.STRIPES) + ['block', 'one colour', 'effect', 'own']
+# (its styles: the PC tool's but black. A plain black border is the effect
+# line's 0, no effect, on rainbow, or your own colour 0: a palette for it
+# said nothing that didn't)
+STYLES = [s for s in S.STRIPES if s != 'black']
+PALETTES = STYLES + ['your own']
+EFFECTS = ['none', 'classic', 'sloppy'] + list(S.FX)[1:] + ['block']    # (each its number on the effect line)
+assert list(S.FX)[0] == 'classic'
+MODES = STYLES + ['block', 'one colour', 'effect', 'own']
+# the effects the border's cycle shows under (classic, mixed, and and ora
+# change the border with every pulse: the step hardly shows there, and
+# costs speed): SlopLoad 64 asks it there and for a plain border only
+CYCLE_FX = ('thin', 'eor', 'line')
 
 
-def lines_for(colours='rainbow', effect='standard'):
+def lines_for(colours='rainbow', effect='sloppy'):
     """SlopLoad 64's lnset: plan()'s lines, fcol, fx, fxb and own from its
     colours line (a style's name, or your own: a list of 1-12 colours) and
-    its effect line (EFFECTS): standard draws the colours as stripes (your
-    own of one: a plain border), an effect starts from their first colour
-    (rainbow's: 0), block steps a colour a block"""
+    its effect line (EFFECTS): none is a plain border of their first
+    colour (rainbow's: 0), sloppy draws the colours as stripes (your
+    own of one: a plain border), an effect starts from their first
+    colour, block steps a colour a block"""
     own = list(colours) if isinstance(colours, (list, tuple)) else None
+    if own is None and colours not in STYLES:
+        raise Refused(f"SlopLoad 64's colours line has no palette {colours!r}"
+                      + (" (a black border: no effect on rainbow, or your own colour 0)" if colours == 'black' else ''))
     first = own[0] if own else (S.STRIPES[colours] or [0])[0]
     if effect == 'block':
         return dict(lines=MODES.index('block'), own=own)
-    if effect != 'standard':
+    if effect == 'none':
+        return dict(lines=MODES.index('one colour'), fcol=first, own=own)
+    if effect != 'sloppy':
         return dict(lines=MODES.index('effect'), fx=list(S.FX).index(effect), fxb=first, own=own)
     if own is None:
         return dict(lines=MODES.index(colours))
@@ -581,8 +596,8 @@ def plan(prg_addr, prg, show='none', game=None, music=None, speed=0, start=None,
     if cycle:
         if smode == 'flat' and modes[lines] != 'block':
             fxs, smode = S.plain_fx(scol), 'fx'
-        elif smode != 'fx':
-            raise Refused("the border cycle goes with an effect or one colour")
+        elif smode != 'fx' or list(S.FX)[fx] not in CYCLE_FX:
+            raise Refused("the border cycle goes with a plain border, thin, eor or line")
     end = prg_addr + len(prg)
     su = setup(show, game, music, (prg_addr, end), wait, fade, count, then, waitgame, mstart)
     g = su['module']
@@ -814,6 +829,8 @@ def plan(prg_addr, prg, show='none', game=None, music=None, speed=0, start=None,
     if smode != 'rainbow':                       # stage 1: one colour, not the timer's
         s1[ss['s1str'] - ss['s1lo']] = 0x2c
         hpart[ss['s1bc'] + 1 - 0x0351] = scol
+        if scol == 2:                            # (its tape error on red: pink)
+            hpart[ss['s1bad'] + 1 - 0x0351] = 10
     hpart = bytes(hpart)
     if isinstance(name, (bytes, bytearray)):    # (as typed on the C64: any codes)
         nm = bytes(name[:16]) + bytes([0x20]) * (16 - len(name[:16]))

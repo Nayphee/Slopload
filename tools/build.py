@@ -204,10 +204,13 @@ FX_EDITS = [
 # has by flipping them (c64build.py, flat_patch). No stripes (the
 # per-pulse store and the final phase's are bit $d020); errshow, the
 # main loop's, keeps the border's colour (bflat: ldx ld_seq, a colour a
-# block, or the tool's ldx #colour; red on a tape error) through bset,
+# block, or the tool's ldx #colour; red on a tape error, or pink when
+# that colour is red itself: a border of solid red is the user's to
+# choose, and the error must still show) through bset,
 # after the exit stub, which writes it only when it changes: on a newer
 # VIC-II (8565) every write to a colour register leaves a grey dot, and
-# the main loop runs this all the time. errshow keeps its length (padded).
+# the main loop runs this all the time. errshow keeps its length (its 19
+# bytes all used: bset is in a branch's reach).
 FLAT_EDITS = [
     ("stripe  stx $d020               ; border stripes ($2c: bit, when off)",
      "stripe  bit $d020               ; (core_flat: no stripes)"),
@@ -217,9 +220,15 @@ FLAT_EDITS = [
      "@ok     lda #$8e                ; stx $d020\n        sta stripe\n        rts\nersend",
      "errshow\n"
      "bflat   ldx ld_seq              ; the border's colour: the block's (or ldx #colour)\n"
-     "        bit ld_state\n        bvc @s\n        ldx #2                  ; a tape error: red\n"
-     "@s      jmp bset\n"
-     "        byte 0,0,0,0,0,0,0,0     ; (errshow's own length)\n"
+     "        bit ld_state\n"
+     "        bvc bset\n"
+     "        txa                     ; a tape error: red, or pink when the\n"
+     "        and #15                 ; border is red already (the colour\n"
+     "        ldx #10                 ; chosen, or this block's)\n"
+     "        cmp #2\n"
+     "        beq bset\n"
+     "        ldx #2\n"
+     "        bne bset                ; (always; errshow's own length, to the byte)\n"
      "ersend"),
     ("\nxstubend\n",
      "\nxstubend\n"
