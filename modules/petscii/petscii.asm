@@ -47,7 +47,7 @@
 ; space and the digits as they are used), at $b800 ($d018 $fe) for 128
 ; or fewer, else at $b000 ($fc); the codes, the message, the space and
 ; the digit 0 renumbered to match.
-; A tape error turns the border red (white if it is red) until
+; A tape error turns the border red (pink if it is red) until
 ; the loader recovers.
 ;
 ; The scroller's split: $d016 (40 columns and the fine scroll) is
@@ -176,13 +176,11 @@ init    jsr gk_musinit          ; the header's music (the tool's choice)
         sta dbg_auto
         lda pborder
         and #15
-        jsr gk_bord
-        ldx #2                  ; a tape error: red, or white on a red border
-        lda pborder             ; (not from $d020: the vic's colour registers
-        and #15                 ; read with their high bits set, never as 2)
-        cmp #2
-        bne @e
-        dex
+        jsr gk_bord             ; (keeps a)
+        ldx #2                  ; a tape error: red, or pink on a red border
+        cmp #2                  ; (the file's colour, not $d020: the vic's colour
+        bne @e                  ; registers read with their high bits set, never
+        ldx #10                 ; as 2)
 @e      stx errcol
         lda pbg
         sta $d021
