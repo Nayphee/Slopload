@@ -95,7 +95,7 @@ pl_lm
         byte $c6,$ca,$d0,$f1,$a0,$00,$c0,$00,$f0,$06,$99,$00,$ff,$c8,$d0,$f6,$60
 
 ; the top lines: the release
-tx_head text "       ",159,"*** ",5,"picture-lm 0.15.2",159," ***",13,151,"      a picture to a loader module",30,0
+tx_head text "       ",159,"*** ",5,"picture-lm 0.17.0",159," ***",13,151,"      a picture to a loader module",30,0
 nfmt = 17
 fmll
         byte $10,$12,$22,$02,$02,$ea,$eb,$42,$02,$43,$26,$25,$74,$42,$2a,$ea

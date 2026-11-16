@@ -751,6 +751,7 @@ startup
         bne @ds
         rts
 rtivs   word rtiv,rtiv,rtiv
+        incasm "machdet.asm"    ; (detect and its parts: run once, from here)
 
 ; ------------------------------------------------------------
 ; buffers: from the payload's core on (it is at coreb by then)

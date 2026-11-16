@@ -72,6 +72,7 @@ minbanks = 8                    ; 512 KB at least
 prch = chrout                   ; (print's character: no words packed here)
         incasm "disk.asm"
         incasm "machine.asm"
+        incasm "machdet.asm"    ; (the machine found: once, at the start)
 
 ; ---- io.asm's variables ----
 inlen   byte 0

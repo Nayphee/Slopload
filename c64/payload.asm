@@ -152,18 +152,17 @@ c2p2 = 916
 c2len = 1016
 cstab = 919
 nc2b = 103
-c2x = 78           ; (its bytes xored: checked before use)
+c2x = 152           ; (its bytes xored: checked before use)
 c2ins = $033c                   ; (the cassette buffer: its lookup, then the packed
 c2d = c2ins + 3                 ; deltas, from pl_c2 at the start)
-stclo = $03d6                   ; (the styles' colour lists' addresses)
-stchi = $03e4
-nstyles = 14                    ; (with a colour list: rainbow to black)
-st_black = 13
-st_block = 14
-st_one = 15
-st_fx = 16                     ; (an effect: opt_fx, core_fx)
-st_own = 17                    ; (your own colours: ownl)
-npal = 15                       ; (the palettes: the styles, your own)
+stclo = $03d4                   ; (the styles' colour lists' addresses)
+stchi = $03e1
+nstyles = 13                    ; (with a colour list: rainbow to candy)
+st_block = 13
+st_one = 14
+st_fx = 15                     ; (an effect: opt_fx, core_fx)
+st_own = 16                    ; (your own colours: ownl)
+npal = 14                       ; (the palettes: the styles, your own)
 stn0 text "rainbow",0
 stn1 text "mono",0
 stn2 text "c64",0
@@ -177,10 +176,9 @@ stn9 text "sunset",0
 stn10 text "stealth",0
 stn11 text "gold",0
 stn12 text "candy",0
-stn13 text "black",0
-stn14 text "your own",0
-stnlo byte <stn0,<stn1,<stn2,<stn3,<stn4,<stn5,<stn6,<stn7,<stn8,<stn9,<stn10,<stn11,<stn12,<stn13,<stn14
-stnhi byte >stn0,>stn1,>stn2,>stn3,>stn4,>stn5,>stn6,>stn7,>stn8,>stn9,>stn10,>stn11,>stn12,>stn13,>stn14
+stn13 text "your own",0
+stnlo byte <stn0,<stn1,<stn2,<stn3,<stn4,<stn5,<stn6,<stn7,<stn8,<stn9,<stn10,<stn11,<stn12,<stn13
+stnhi byte >stn0,>stn1,>stn2,>stn3,>stn4,>stn5,>stn6,>stn7,>stn8,>stn9,>stn10,>stn11,>stn12,>stn13
 
 ; core_flat from the core: its differing bytes (offset low, high; xor)
 nfl = 33
@@ -188,6 +186,7 @@ cbflat = 891             ; ldx ld_seq, or ldx #colour
 cldseq = $0e              ; (the loader's ld_seq: the block's number)
 cs1str = 37             ; stage 1: its border store (in its block),
 cs1bc = 31               ; its border's colour (in the header part)
+cs1er = 163              ; its tape error's colour (2; 10 on red)
 flo
         byte $23,$70,$7b,$7c,$7d,$7e,$7f,$80,$81,$82,$83,$84,$85,$86,$87,$88
         byte $89,$8a,$8b,$8c,$8d,$e9,$ea,$eb,$ec,$ed,$ee,$ef,$f0,$f1,$f2,$f3
@@ -197,8 +196,8 @@ fhi
         byte $03,$03,$03,$03,$03,$03,$03,$03,$03,$03,$03,$03,$03,$03,$03,$03
         byte $03
 fxr
-        byte $a2,$a2,$82,$0c,$74,$0b,$70,$8c,$a5,$ab,$4e,$64,$27,$d0,$60,$a9
-        byte $8e,$8d,$23,$04,$60,$8a,$4d,$20,$d0,$29,$0f,$f0,$03,$8e,$20,$d0
+        byte $a2,$a2,$82,$0c,$74,$0b,$70,$e6,$8d,$80,$0d,$2f,$2a,$19,$62,$59
+        byte $d1,$2f,$21,$d4,$3b,$8a,$4d,$20,$d0,$29,$0f,$f0,$03,$8e,$20,$d0
         byte $60
 
 ; core_fx from the core (tools/c64build.py fx_patch): from cfxp + 3 moved up 7,
@@ -241,6 +240,8 @@ fxcost
         byte $0a,$0c,$0c,$08,$08,$08,$08,$00
 fxval
         byte $00,$00,$00,$04,$04,$04,$01,$00
+fxcyc
+        byte $00,$01,$00,$00,$00,$01,$01
 fxcof
         byte $00,$00,$00,$00,$00,$00,$06,$00
 fxtpl
@@ -261,29 +262,31 @@ fxa0v
         byte $ad,$2c,$2c,$ad,$ad,$ad,$2c,$2c
 fxb0v
         byte $2c,$2c,$2c,$2c,$2c,$2c,$2c,$2c
-neff = 9
-effn0 text "standard",0
+neff = 10
+effn0 text "no effect",0
 effn1 text "classic",0
-effn2 text "thin",0
-effn3 text "mixed",0
-effn4 text "and",0
-effn5 text "ora",0
-effn6 text "eor",0
-effn7 text "line",0
-effn8 text "block",0
-effnlo byte <effn0,<effn1,<effn2,<effn3,<effn4,<effn5,<effn6,<effn7,<effn8
-effnhi byte >effn0,>effn1,>effn2,>effn3,>effn4,>effn5,>effn6,>effn7,>effn8
-effd0 text 155,"line 7's colours",5,0
+effn2 text "sloppy",0
+effn3 text "thin",0
+effn4 text "mixed",0
+effn5 text "and",0
+effn6 text "ora",0
+effn7 text "eor",0
+effn8 text "line",0
+effn9 text "block",0
+effnlo byte <effn0,<effn1,<effn2,<effn3,<effn4,<effn5,<effn6,<effn7,<effn8,<effn9
+effnhi byte >effn0,>effn1,>effn2,>effn3,>effn4,>effn5,>effn6,>effn7,>effn8,>effn9
+effd0 text 155,"line 7's first colour",5,0
 effd1 text 155,"colour +1 a pulse",5,0
-effd2 text 155,"thin lines",5,0
-effd3 text 155,"classic and thin",5,0
-effd4 text 155,"colour and value",5,0
-effd5 text 155,"colour or value",5,0
-effd6 text 155,"colour eor value",5,0
-effd7 text 155,"lines of one colour",5,0
-effd8 text 155,"a colour a block",5,0
-effdlo byte <effd0,<effd1,<effd2,<effd3,<effd4,<effd5,<effd6,<effd7,<effd8
-effdhi byte >effd0,>effd1,>effd2,>effd3,>effd4,>effd5,>effd6,>effd7,>effd8
+effd2 text 155,"line 7's colours",5,0
+effd3 text 155,"thin lines",5,0
+effd4 text 155,"classic and thin",5,0
+effd5 text 155,"colour and value",5,0
+effd6 text 155,"colour or value",5,0
+effd7 text 155,"colour eor value",5,0
+effd8 text 155,"lines of one colour",5,0
+effd9 text 155,"a colour a block",5,0
+effdlo byte <effd0,<effd1,<effd2,<effd3,<effd4,<effd5,<effd6,<effd7,<effd8,<effd9
+effdhi byte >effd0,>effd1,>effd2,>effd3,>effd4,>effd5,>effd6,>effd7,>effd8,>effd9
 
 ; a chain's switch (src/chain.asm): its 12 bytes at swvec filled in
 chainat = $0380
@@ -299,6 +302,9 @@ pl_sw
         byte $d0,$8d,$1b,$d0,$8d,$1c,$d0,$8d,$1d,$d0,$a9,$08,$8d,$16,$d0,$20
         byte $d5,$03,$6c,$ea,$03,$6c,$e8,$03,$ad,$e3,$03,$d0,$03,$6c,$e6,$03
         byte $6c,$ec,$03,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00
+
+; the menu's top line: the release (VERSION)
+tx_head text 147,5,"        ",159,"*** ",5,"slopload 0.17.0",159," ***",13,152,0
 
 ; stage 1's data block, its header part, the core
 pl_s1blk
@@ -396,10 +402,7 @@ pl_c2
         byte $99,$50,$0e,$08,$1d,$1c,$26,$08,$18,$71,$00,$02,$00,$01,$02,$06
         byte $0e,$03,$06,$0e,$03,$02,$02,$0a,$02,$05,$0d,$03,$02,$08,$07,$04
         byte $06,$0e,$03,$01,$03,$0b,$0c,$0f,$04,$04,$02,$08,$07,$02,$00,$0b
-        byte $03,$09,$08,$07,$03,$0a,$04,$0e,$01,$00,$a6,$a7,$aa,$ad,$b1,$b4
-        byte $b7,$bb,$c0,$c4,$c9,$cc,$d0,$d4,$03,$03,$03,$03,$03,$03,$03,$03
-        byte $03,$03,$03,$03,$03,$03
-c2n = 182
-
-; the menu's top line: the release (VERSION)
-tx_head text 147,5,"        ",159,"*** ",5,"slopload 0.15.2",159," ***",13,152,0
+        byte $03,$09,$08,$07,$03,$0a,$04,$0e,$a6,$a7,$aa,$ad,$b1,$b4,$b7,$bb
+        byte $c0,$c4,$c9,$cc,$d0,$03,$03,$03,$03,$03,$03,$03,$03,$03,$03,$03
+        byte $03,$03
+c2n = 178

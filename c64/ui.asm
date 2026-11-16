@@ -15,6 +15,8 @@
 ; screen off). A picture is a module (PICTURE-LM makes one).
 ; ------------------------------------------------------------
 pok     byte 0                  ; a program read
+adev    byte 8                  ; line 1's drive as asked (the program's once
+                                ; one is read: return alone keeps both)
 tnset   byte 0                  ; the name on tape typed (else the program's)
 
 ; ------------------------------------------------------------
@@ -478,27 +480,19 @@ prsname ldx stnlo,y
 prswatch
         sty t1
         sta t3
-        lda #18
-        jsr chrout
+        jsr pcbeg
         ldx #0
 @c      txa
         ldy t1
         jsr stcol
-        tay
-        lda colcode,y
-        jsr chrout
-        lda #' '
-        jsr chrout
+        jsr pcell
         txa
         clc
         adc t3
         tax
         cpx #12
         bcc @c
-        lda #146
-        jsr chrout
-        lda #5
-        jmp chrout
+        jmp pcend
 colcode byte 144,5,28,159,156,30,31,158,129,149,150,151,152,153,154,155
 
 ; ------------------------------------------------------------
@@ -509,19 +503,36 @@ aprog   lda prgdev
         ldx #<q_drive
         ldy #>q_drive
         jsr asknum
-        bcs @x
+        bcs @x0
         cmp #8
-        bcc @x
+        bcc @x0
         cmp #31
-        bcs @x
-        sta prgdev
-        ldx #<q_prog
+        bcc @d
+@x0     rts
+@d      sta adev
+        sta ddev                ; ($ and @ on that drive: disk.asm)
+@nm     ldx #<q_prog
         ldy #>q_prog
         jsr print
         lda #16
         jsr readline
         lda inlen
-        beq @x
+        beq @x0                 ; return alone: kept
+        lda inbuf
+        cmp #'$'
+        bne @at
+        jsr dirshow             ; $: its files, then asked again
+        jmp @nm
+@at     cmp #'@'
+        bne @go
+        lda inlen
+        cmp #1
+        bne @go
+        jsr dcmd                ; @ alone: its status and commands
+        jmp @nm
+@go     lda adev
+        sta prgdev
+        lda inlen
         sta prglen
         ldx #0
 @cn     lda inbuf,x
@@ -577,7 +588,7 @@ askst   ldx #<q_start
 @x      rts
 q_start text "not at $0801: its start, sys [",0
 q_drive text "drive with the program [",0
-q_prog  text "its file name? ",0
+q_prog  text "its file name ($: files, @: disk,",13,"return: keep it)? ",0
 
 ; prpinfo  "$0801-$1fff, 6143 bytes"
 prpinfo jsr prrange
@@ -1002,8 +1013,9 @@ tx_dottap text ".tap"
 q_xmem  text "write it in one go from the expansion",13,"memory? y/n [y] ",0
 
 ; 7  the colours: a palette, as the pc's -stripes NAME (a style: rainbow
-; to black), or your own (1 to 12 colours, as -stripes 6,14,3; one alone
-; a plain border). The standard effect draws them as stripes; the others
+; to candy; not its black: line 8's no effect on rainbow is that), or
+; your own (1 to 12 colours, as -stripes 6,14,3; one alone
+; a plain border). The sloppy effect draws them as stripes; the others
 ; start from the first (line 8)
 acol    ldx #0                  ; the palettes, two a row: number, colours, name
 @l      stx t2
@@ -1071,9 +1083,12 @@ acol    ldx #0                  ; the palettes, two a row: number, colours, name
 q_col   text "colours [",0
 q_own   text "your own, 1-12 of 0-15 [",0
 
-; 8  the effect: 1 standard (the colours as stripes, SlopLoad's own), 2-7
-; the classic loaders' (the pc's -stripes classic ... eor:N, from the
-; colours' first), 8 a colour a block (-stripes block); its value (and,
+; 8  the effect: 0 none (a plain border, the colours' first: the pc's
+; -stripes with one colour), 1 classic and 3-8 the other classic
+; loaders' (the pc's -stripes classic ... line:N, from the colours'
+; first), 2 sloppy (the colours as stripes, SlopLoad's own: the one it
+; starts with), 9 a colour a block (-stripes block): each its number in
+; the list (opt_eff); its value (and,
 ; ora, eor); then the cycle, where it goes, and the lines on through the
 ; module or the music
 aeff    ldx #0                  ; the effects, one a row: number, name and
@@ -1081,8 +1096,6 @@ aeff    ldx #0                  ; the effects, one a row: number, name and
         lda #' '
         jsr chrout
         txa
-        clc
-        adc #1
         ldx #0
         jsr prdec16
         lda #' '
@@ -1098,10 +1111,19 @@ aeff    ldx #0                  ; the effects, one a row: number, name and
         clc
         jsr plot
         ldx t2
-        lda effdlo,x
+        lda effdlo,x            ; a few words on it
         ldy effdhi,x
         tax
         jsr print
+        lda #13                 ; its colours on the row under them
+        jsr chrout
+        sec
+        jsr plot
+        ldy #13
+        clc
+        jsr plot
+        ldx t2
+        jsr effsw
         lda #13
         jsr chrout
         ldx t2
@@ -1109,22 +1131,18 @@ aeff    ldx #0                  ; the effects, one a row: number, name and
         cpx #neff
         bcc @l
         lda opt_eff
-        clc
-        adc #1
         ldx #<q_fx
         ldy #>q_fx
         jsr asknum
         bcs @q
-        cmp #1
-        bcc @q
-        cmp #neff+1
+        cmp #neff
         bcs @q
-        sbc #0                  ; (c clear: one less)
         sta opt_eff
-        tax
-        dex
-        cpx #nfxs
-        bcs @q                  ; (standard, block: no value)
+        tax                     ; (the effect in slopload.py's order, where
+        dex                     ; it has a value: thin, 3, its second; none
+        dex                     ; and classic past the end, sloppy at classic's
+        cpx #nfxs               ; place, which has no value)
+        bcs @q                  ; (none, classic, block: no value)
         lda fxval,x
         beq @q
         lda fxcof,x             ; (line: its value is the line's colour)
@@ -1166,6 +1184,103 @@ q_fxl   text "the line's colour 0-15 [",0
 q_cyc   text "a colour on each page loaded? y/n [n] ",0
 q_cycb  text "the border a colour on each block?",13,"y/n [n] ",0
 
+; pfirst  line 7's first colour (rainbow's: 0): no effect's, and where
+; an effect starts from
+;   uses: a, y, p3
+pfirst  ldy opt_pal
+        jsr palst
+        lda #0
+        jmp stcol
+
+; effsw  effect x's colours as it draws them with line 7's (and, ora,
+; eor, line: with the value set, said after them): reversed spaces
+;   uses: a, x, y, t0, t1, p3
+effsw   cpx #2
+        bne @s
+        ldy opt_pal             ; 2 sloppy: line 7's, by the pulse's length
+        jsr palst
+        lda #1
+        jmp prswatch
+@s      stx t1
+        jsr pfirst              ; the others from line 7's first (block: 0)
+        ldx t1
+        cpx #neff-1
+        bne @b
+        lda #0
+@b      sta t0
+        jsr pcbeg
+        lda effn,x              ; a run of colours, one on each (0: by the
+        beq @v                  ; value)
+        tax
+@a      lda t0
+        jsr pcell
+        inc t0                  ; (pcell takes it mod 16)
+        dex
+        bne @a
+        jmp pcend
+@v      cpx #7
+        bcc @ao
+        lda t0                  ; 7 eor: it and it eor the value; 8 line:
+        jsr pcell               ; its border (the first) and the line's
+        lda opt_fxn
+        cpx #8
+        beq @l8
+        eor t0
+@l8     jsr pcell
+        jmp @e
+@ao     ldx #0                  ; 5 and: each colour with no bit outside the
+@c      txa                     ; value; 6 ora: each with all of its bits
+        ldy t1                  ; (the byte coming in, and or ora it)
+        cpy #5
+        bne @o
+        and opt_fxn
+        bpl @an                 ; (always)
+@o      ora opt_fxn
+@an     sta t0
+        cpx t0
+        bne @nx
+        txa
+        jsr pcell
+@nx     inx
+        cpx #16
+        bcc @c
+@e      jsr pcend
+        ldx #<tx_fxv
+        ldy #>tx_fxv
+        jsr print
+        lda opt_fxn
+        ldx #0
+        jsr prdec16
+        lda #5                  ; (white again)
+        jmp chrout
+tx_fxv  text 155," value ",0
+; each effect's run of colours from its first: no effect 1, classic 16,
+; thin 2 (it and the next: its thin lines), mixed 16, block 16 (from 0);
+; 0: and, ora, eor, line by the value (sloppy: line 7's, not here)
+effn    byte 1,16,0,2,16,0,0,0,0,16
+
+; pcbeg, pcell, pcend  a row of colour cells: reverse on; colour a's
+; (mod 16: a reversed space; black, which wouldn't show on the black
+; screen, a dark grey check); reverse off, white
+;   pcell keeps x
+pcbeg   lda #18
+        jmp chrout
+pcell   and #15
+        tay
+        lda colcode,y
+        ldy #' '
+        cmp #144                ; (black's code)
+        bne @c
+        lda #151
+        ldy #$a6
+@c      jsr chrout
+        tya
+        jmp chrout
+pcend   lda #146
+        jsr chrout
+        lda #5
+        jmp chrout
+
 ; isline  c set for the line effect (its border's colour in its bytes)
 isline  lda opt_lines
         cmp #st_fx
@@ -1185,28 +1300,30 @@ q_showl text "keep the loading bars in the border",13,"while the module or music
 ; lines_for; the cycle off where it can't go
 ;   uses: a, x, y, p3
 lnset   ldx opt_eff
-        beq @std
+        beq @none               ; no effect: a plain border, the colours' first
+        cpx #2
+        beq @std                ; sloppy: the colours as stripes
         lda #st_block
         cpx #neff-1
         beq @set                ; (a colour a block)
-        dex                     ; an effect, from the colours' first
-        stx opt_fx
-        ldy opt_pal
-        jsr palst
-        lda #0
-        jsr stcol
+        dex                     ; an effect, from the colours' first: classic
+        beq @fx                 ; (1) slopload.py's first, 3 on its second on
+        dex
+@fx     stx opt_fx
+        jsr @first
         sta opt_fxb
         lda #st_fx
         bne @set
-@std    lda opt_pal             ; standard: a style's number (black: st_black)
+@first  jmp pfirst
+@std    lda opt_pal             ; sloppy: a style's number
         cmp #npal-1
         bne @set
         lda #st_own             ; your own: two or more, a list
         ldx ownl
         dex
         bne @set
-        lda ownl+1              ; one: that colour (core_flat)
-        sta opt_fcol
+@none   jsr @first              ; one colour (core_flat): your own's only
+        sta opt_fcol            ; one, or with no effect the first
         lda #st_one
 @set    sta opt_lines
         jsr cycok
@@ -1215,15 +1332,19 @@ lnset   ldx opt_eff
         sta opt_cyc
 @x      rts
 
-; cycok  c set when the cycle can go: an effect, black or one colour
+; cycok  c set when the cycle can go: one colour (a plain border), or an
+; effect it shows under (fxcyc: thin, eor, line; the others change the
+; border with every pulse)
+;   uses: a, x
 cycok   lda opt_lines
-        cmp #st_fx
-        beq @y
-        cmp #st_black
-        beq @y
         cmp #st_one
         beq @y
-        clc
+        cmp #st_fx
+        bne @n
+        ldx opt_fx
+        lda fxcyc,x
+        bne @y
+@n      clc
         rts
 @y      sec
         rts
@@ -1319,8 +1440,9 @@ prfx    ldx opt_eff
         jsr print
         ldx opt_eff
         dex
+        dex
         cpx #nfxs
-        bcs @x                  ; (standard, block)
+        bcs @x                  ; (none, classic, block; sloppy: classic's place, no value)
         lda fxval,x
         beq @x
         lda #' '

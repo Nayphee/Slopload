@@ -101,6 +101,7 @@ prch = chrout                   ; (print's character: no words packed here)
         incasm "disk.asm"
         incasm "wfile.asm"
         incasm "machine.asm"
+        incasm "machdet.asm"    ; (the machine found: once, at the start)
         incasm "math.asm"
         incasm "sidread.asm"
         incasm "trial.asm"

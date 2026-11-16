@@ -10,15 +10,18 @@ opt_show byte 0                 ; 0 nothing, 1 a module, 4 music (shset: from
 opt_speed byte spneg           ; the speed + spneg (-12 to 13: payload.asm's tables)
 opt_start word 0                ; 0: RUN, else the address to jump to
 opt_out byte 0                  ; 0 the cassette, 1 a .tap file
-opt_pal byte 0                  ; the colours (line 6): a style, 0 rainbow to
-                                ; st_black, or npal-1 your own (ownl)
-opt_eff byte 0                  ; the effect (line 7): 0 standard, 1 to nfxs one
-                                ; of slopload.py's FX, neff-1 a colour a block
+opt_pal byte 0                  ; the colours (line 7): a style, 0 rainbow on,
+                                ; or npal-1 your own (ownl)
+opt_eff byte 2                  ; the effect (line 8), its number there: 0 none
+                                ; (a plain border, the colours' first), 1
+                                ; classic, 2 sloppy (SlopLoad's own stripes),
+                                ; 3 to nfxs+1 the rest of slopload.py's FX,
+                                ; neff-1 a colour a block
 ownl    byte 2,6,14,0,0,0,0,0,0,0,0,0,0 ; your own colours: how many, then they
 opt_lines byte 0                ; the loading lines (ui's lnset, from opt_pal and
                                 ; opt_eff): 0 rainbow (the core as
-                                ; it is), 1 to st_black - 1 a style (core_stripes),
-                                ; st_black, st_block, st_one: no stripes (core_flat),
+                                ; it is), 1 to st_block - 1 a style (core_stripes),
+                                ; st_block, st_one: no stripes (core_flat),
                                 ; st_fx an effect (core_fx: opt_fx), st_own
                                 ; your own colours (core_stripes, ownl)
 opt_fcol byte 6                 ; st_one's colour
@@ -758,10 +761,10 @@ flflip  ldx #0
 fl_x    rts
 
 ; flatcol  the style: c set for one with no stripes (core_flat), a its
-; colour (st_black 0, st_one opt_fcol, st_block 0: the block's own);
+; colour (st_one opt_fcol, st_block 0: the block's own);
 ; c clear for rainbow, a table style or an effect (keeps x, y)
 flatcol lda opt_lines
-        cmp #st_black
+        cmp #st_block
         bcc @x
         cmp #st_fx
         bcs @fx
@@ -786,7 +789,7 @@ showl   lda opt_showl
 @n      clc
         rts
 
-; fxon  c set for core_fx: an effect, or black or one colour with the
+; fxon  c set for core_fx: an effect, or one colour with the
 ; cycle (the plain effect, fxplain) (keeps x, y)
 fxon    lda opt_lines
         cmp #st_fx
@@ -1172,6 +1175,10 @@ mkhead  lda #3
         beq @r
         jsr s1col
         sta header+21+cs1bc
+        cmp #2                  ; its tape error on red: pink (as built: red;
+        bne @r                  ; the header is copied fresh each time)
+        lda #10
+        sta header+21+cs1er
 @r      rts
 
 ; ------------------------------------------------------------
