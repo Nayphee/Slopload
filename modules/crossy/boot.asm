@@ -27,12 +27,7 @@ init    jsr gk_musinit          ; the music's addresses from the header
         sta $d021
         lda #$0b
         sta $d011
-        lda $dd02
-        ora #3
-        sta $dd02
-        lda $dd00
-        and #$fc                ; vic bank 3
-        sta $dd00
+        jsr gk_bank             ; vic bank 3 (2 where a tool moved it)
         lda #1
         sta $d022               ; white
         lda #2

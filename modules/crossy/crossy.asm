@@ -51,11 +51,14 @@ gk_barhalf = 1                  ; the status bar: 5 characters, 2 px a step
 gk_srow = 2*40                  ; the status line: row 2
 
 ; ---- memory ----
-scra = $e400                    ; (the character set's half that is never shown)
-scrb = $e800
+mb = $c000                      ; the module's VIC bank, as built (bank 3); a tool
+                                ; moves a module a bank down for a chain: every
+                                ; address in the bank is mb+ (its relocations)
+scra = mb+$2400                    ; (the character set's half that is never shown)
+scrb = mb+$2800
 d018a = $98                     ; screen $e400, charset $e000
 d018b = $a8                     ; screen $e800
-chrset = $e000
+chrset = mb+$2000
 
 ; ---- play ----
 playlo = 8                      ; the hen's x range (multicolour px):
@@ -171,13 +174,13 @@ ej0 = $6c                       ; ... and its lane
 dbg_space = $8e                 ; debug: non-zero presses space once loaded
 dbg_auto = $8f                  ; debug: non-zero plays by itself
 
-*=$c8e0                         ; (past $c000-$c92a: SlopLoad's player there, the effects beside it;
+*=mb+$08e0                         ; (past $c000-$c92a: SlopLoad's player there, the effects beside it;
                                 ; the low part ends at $cfe8 as before, the fade in it too)
 lowpart                         ; (a second part: tools/build.py splits it off)
         incasm "low.asm"
 lowend
 
-*=$e000
+*=mb+$2000
 mainpart
         incasm "modhead.asm"
         incasm "chars.asm"
@@ -199,7 +202,7 @@ holdt   byte 150,115            ; a tick held from this line: PAL, NTSC (vb1)
 imghi   byte >henimg,>henimg+42,>henimg+84,>henimg+126,>henimg+168
 budt    byte budgetl,130        ; lanedraw starts lanes till: PAL, NTSC (the
                                 ; held frames: 180)
-*=$ec00
+*=mb+$2c00
 
 ; ------------------------------------------------------------
 ; frame  one frame: vertical blank, split, one tick

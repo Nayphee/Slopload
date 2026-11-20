@@ -17,7 +17,10 @@ hpbase  = $d000                 ; the high pool
 hpmax   = $fffa-$d000           ; ... its size
 stage   = $a000                 ; a tune's file, as read (7.5 KB)
 stagemax = $1e00
-mrel    = $c700                 ; a prepared tune's relocations (512 words)
+mrel    = $c700                 ; a prepared tune's relocations (511 at most, as
+                                ; gaps: mgaps; 529 bytes at most)
+lsts    = mrel+530              ; setup.asm's lists, then (to $cb00), and more of its
+                                ; buffers (made 0 at the start)
 showbuf = $f800                 ; the show module, moved: in the high pool,
                                 ; past a picture (a game longer than $2800
                                 ; is read again after)
@@ -27,15 +30,22 @@ dmax    = 16
 fdev    byte 8                  ; fload's file: drive, name
 fnlen   byte 0
 fname   byte 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
-fmax    word 0                  ; ... the most bytes to read
-flen    word 0                  ; ... the bytes read
-flong   byte 0                  ; ... 1: it was longer than fmax
-dnum    byte 0                  ; names listed
+; (fmax: the most bytes to read; flen: the bytes read; flong: 1, it was
+; longer than fmax; dnum: names listed): in the tape buffer's spare bytes,
+; made 0 at the start (slopload64.asm), with more of setup.asm's
+fmax    = $0334
+flen    = fmax+2
+flong   = flen+2
+dnum    = flong+1
+                                ; ($0334-$033b; $033c-$03ed the core's patch,
+                                ; c2ins; then $03ee-$03ff: setup.asm's)
 
 ; ------------------------------------------------------------
 ; fload  the file fdev/fname into memory from p1 (the high pool
 ; written with the I/O and KERNAL switched out for each byte)
-;   in:   p1, fmax
+;   in:   p1, fmax (hpmax: a module into the high pool, and one longer
+;         read to there: what fits, flong 1; its relocations then can't
+;         be used)
 ;   out:  flen; c set on an error (said: the drive's status, too long,
 ;         empty)
 ;   uses: a, x, y, p1, t0
@@ -82,7 +92,7 @@ fload   lda #0
         and #$40
         beq @r
         jsr fclose
-        lda flen
+@fin    lda flen
         ora flen+1
         beq @empty
         clc
@@ -105,6 +115,9 @@ fload   lda #0
         rts
 @long   jsr fclose
         inc flong
+        lda fmax+1              ; (a module: what fits)
+        cmp #>hpmax
+        beq @fin
         ldx #<tx_long
         ldy #>tx_long
         jsr print

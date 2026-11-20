@@ -5,11 +5,15 @@ background, laid out as U.S. Gold's Novaload screen.
 
     python3 modules/ozgold/mkscreen.py [preview.png]
 
-Writes modules/ozgold/screen.asm (the 1,000 screen codes: the module's
-second part, at $BC00) and colours.asm (the 1,000 colours), and, given a
-file name, a picture of the screen as a C64 shows it. Not run by
-tools/build.py: it needs the character ROM (VICE's), which only the
-Union Jack and the preview use. Run it again after changing the design.
+Writes modules/ozgold/ozgold.pet, a PETSCII screen as Petmate exports
+one (40, 25, the border, the background, 1 for upper case, then the
+1,000 screen codes and the 1,000 colours): OZ GOLD is that screen in
+PETSCII-Load, made by tools/build.py with the options in ozgold.opt
+(tools/petscii.py's: its counter's place), and by anyone from the .pet
+with PETSCII-LM on a C64. Given a file name, also a picture of the
+screen as a C64 shows it. Not run by tools/build.py: it needs the
+character ROM (VICE's), which only the Union Jack and the preview use.
+Run it again after changing the design.
 
 What is on it:
   the Union Jack, 18 x 9 cells at the top left: drawn in pixels, each
@@ -22,7 +26,7 @@ What is on it:
     the same pieces (blocks and triangles)
   ALL AUSTRALIAN SOFTWARE on a gold stripe, a green one under it
   U.S. Gold's bottom rows: BLOCKS TO LOAD and the box for the counter
-    (the module writes the digits)
+    (PETSCII-Load writes the digits: ozgold.opt's -counter 24,24)
 """
 import math
 import os
@@ -49,10 +53,9 @@ OZ_Z = [[0xa0, 0xa0, 0xa0, 0xa0], [0x20, 0x20, 0xe9, 0x69], [0x20, 0xe9, 0x69, 0
 US_22 = [0x79] * 40
 US_23 = [0xa0] * 23 + [0xec, 0xe2, 0xe2, 0xe2, 0xfb] + [0xa0] * 12
 US_24 = [0xa0] * 9 + [0x82, 0x8c, 0x8f, 0x83, 0x8b, 0x93, 0xa0, 0x94, 0x8f, 0xa0, 0x8c, 0x8f, 0x81, 0x84,
-                      0x61, 0x30, 0x37, 0x39, 0xe1] + [0xa0] * 12
-DIGITS = 24 * 40 + 24        # where the module writes the counter
-ERRROW = 21                  # and TAPE ERROR (a blank row)
-TX_ERR = "TAPE ERROR: REWIND A BIT, PRESS PLAY"
+                      0x61, 0x30, 0x30, 0x30, 0xe1] + [0xa0] * 12
+BORDER = BLACK
+COUNTER = (24, 24)           # where the counter's digits go (ozgold.opt says so too)
 
 codes = [0x20] * 1000
 cols = [BLUE] * 1000
@@ -167,18 +170,11 @@ def design(glyphs):
             put(r, c, code, BLACK if code != 0x20 else BG)
 
 
-def asm_bytes(label, data, note):
-    out = [f"; {note}", f"{label}"]
-    for i in range(0, len(data), 20):
-        out.append("        byte " + ",".join(f"${b:02x}" for b in data[i:i + 20]))
-    return "\n".join(out) + "\n"
-
-
 def preview(glyphs, path):
     from PIL import Image
     sys.path.insert(0, os.path.join(HERE, '..', '..', 'tests'))
     from vicshot import PAL
-    out = Image.new('RGB', (352, 232), PAL[BLACK])
+    out = Image.new('RGB', (352, 232), PAL[BORDER])
     o = out.load()
     for r in range(25):
         for c in range(40):
@@ -192,18 +188,12 @@ def preview(glyphs, path):
 def main():
     glyphs = glyph_table()
     design(glyphs)
-    head = "; made by mkscreen.py: change the design there and run it again\n"
-    open(os.path.join(HERE, 'screen.asm'), 'w').write(
-        head + asm_bytes("scrdata", codes, "the screen codes (the second part, at $bc00)"))
-    open(os.path.join(HERE, 'colours.asm'), 'w').write(
-        head + asm_bytes("coldata", cols, "the colours (copied to $d800 at init)")
-        + f"o_digits = {DIGITS}               ; the counter's first digit (row 24, column 24)\n"
-        + f"o_errrow = {ERRROW * 40}               ; TAPE ERROR's row (21)\n"
-        + asm_bytes("tx_err", [scode(ch) for ch in TX_ERR], "the tape error message (white, on row 21)")
-        + "tx_errend\n")
+    assert codes[COUNTER[0] * 40 + COUNTER[1]:][:3] == [0x30] * 3, "the counter's digits aren't at COUNTER"
+    out = os.path.join(HERE, 'ozgold.pet')
+    open(out, 'wb').write(bytes([40, 25, BORDER, BG, 1]) + bytes(codes) + bytes(cols))
     if len(sys.argv) > 1:
         preview(glyphs, sys.argv[1])
-    print("screen.asm, colours.asm")
+    print(out)
 
 
 if __name__ == '__main__':

@@ -171,26 +171,36 @@ master  jsr mkcore
         ldx #<header
         ldy #>header
         jsr romexp192
-        lda #<romh2
-        sta p1
-        lda #>romh2
+        lda #<romtmp            ; (the repeat differs only in its countdown:
+        sta p1                  ; its first 45 symbol bytes kept, rom45)
+        lda #>romtmp
         sta p1+1
         lda #$09
         ldx #<header
         ldy #>header
         jsr romexp192
+        lda #<romh2
+        sta p1
+        lda #>romh2
+        sta p1+1
+        jsr rom45
         lda #<romd1
         sta p1
         lda #>romd1
         sta p1+1
         lda #$89
         jsr romexps1
+        lda #<romtmp
+        sta p1
+        lda #>romtmp
+        sta p1+1
+        lda #$09
+        jsr romexps1
         lda #<romd2
         sta p1
         lda #>romd2
         sta p1+1
-        lda #$09
-        jsr romexps1
+        jsr rom45
         lda opt_out             ; in one go?
         ora xmem
         beq @c
@@ -509,9 +519,13 @@ mkfirst lda #<seclist
         lda #77                 ; 79 S after the block's end mark (3 in it)
         ldx #0
         jsr secroml
-        lda #<romh2
-        ldx #>romh2
-        jsr secromd
+        lda #<romh2             ; (the repeat: its countdown's 45 bytes, then
+        ldx #>romh2             ; the first copy's)
+        jsr secr45
+        lda #<(romh1+45)
+        ldx #>(romh1+45)
+        ldy #0
+        jsr secrest
         lda #<5453              ; and the 0x1500 between the blocks
         ldx #>5453
         jsr secroml
@@ -523,7 +537,11 @@ mkfirst lda #<seclist
         jsr secroml
         lda #<romd2
         ldx #>romd2
-        jsr secromd2
+        jsr secr45
+        lda #<(romd1+45)
+        ldx #>(romd1+45)
+        ldy #1
+        jsr secrest
         lda #75                 ; 78 after the last
         ldx #0
         jsr secrom
@@ -569,6 +587,35 @@ secrs   sta t0
         lda #0
         sta t3
         jmp secrunt
+; rom45  a KERNAL block's repeat: the first 45 symbol bytes made at
+; romtmp (its countdown, $09-$01, and the data's first symbol) to p1 (the
+; rest is as the first copy's: secrest)
+rom45   ldy #44
+@c      lda romtmp,y
+        sta (p1),y
+        dey
+        bpl @c
+        rts
+
+; secr45  ... the repeat's own 45 bytes at a/x, a section; secrest the
+; rest at a/x: 1011 - 45 bytes (y 0), or stage 1's block's (y 1)
+secr45  sta t0
+        stx t1
+        lda #45
+        ldx #0
+        beq secrl
+secrest sta t0
+        stx t1
+        lda #<(1011-45)
+        ldx #>(1011-45)
+        dey
+        bne secrl
+        lda #<(romdlen-45)
+        ldx #>(romdlen-45)
+secrl   sta t2
+        stx t3
+        jmp secromc
+
 ; secromd / secromd2  a KERNAL block's symbols (1011 bytes / stage 1's
 ; block's, (s1blklen+10)*5+1) at a/x
 secromd sta t0
@@ -719,6 +766,23 @@ startup
         dex
         bpl @v
         jsr detect              ; an accelerator, expansion memory
+        lda #0                  ; (the buffers past the program: 0; the tape
+        ldx #8                  ; buffer's spare bytes too)
+@zt     sta $0334-1,x
+        dex
+        bne @zt
+        ldx #$400-$3ee
+@zt2    sta $03ee-1,x
+        dex
+        bne @zt2
+        ldx #bufsend-lstsend
+@zb     sta lstsend-1,x
+        dex
+        bne @zb
+        ldx #$100-$c2
+@zc     sta $cfc2-1,x
+        dex
+        bne @zc
         lda xkind               ; (expansion memory there: a tape in one go
         sta xmem                ; from it, unless 9 says no)
         ldx #0                  ; dibsum: each byte's 2-bit pairs summed
@@ -758,11 +822,13 @@ rtivs   word rtiv,rtiv,rtiv
 ; ------------------------------------------------------------
 bss     = pl_core
 romh1 = bss                     ; the KERNAL header block's symbols
-romh2 = romh1 + 1011            ; ... its repeat
+romh2 = romh1 + 1011            ; ... its repeat's first 45 (the rest: romh1's)
 romdlen = (s1blklen+10)*5+1     ; (stage 1's block: s1blklen bytes, 20 pulses each, 4 a byte)
-romd1 = romh2 + 1011            ; the data block's
-romd2 = romd1 + romdlen
-blkb = romd2 + romdlen          ; header, pad, data, check, trailer
+romd1 = romh2 + 45              ; the data block's
+romd2 = romd1 + romdlen         ; (its repeat's first 45)
+blkb = romd2 + 45               ; header, pad, data, check, trailer
+romtmp = $a000                  ; (a repeat made whole, its 45 bytes kept: free
+                                ; at the start of master)
 btab = blkb + 4300              ; the blocks (maxblk each)
 bal = btab
 bah = bal + maxblk

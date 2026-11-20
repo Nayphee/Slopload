@@ -18,7 +18,10 @@
         incasm "abi.asm"
 
 ; ---- memory ----
-scra = $e400                    ; one screen: the kit's two are the same
+mb = $c000                      ; the module's VIC bank, as built (bank 3); a tool
+                                ; moves a module a bank down for a chain: every
+                                ; address in the bank is mb+ (its relocations)
+scra = mb+$2400                    ; one screen: the kit's two are the same
 scrb = scra
 d018v = $98                     ; screen $e400, characters $e000
 
@@ -69,11 +72,11 @@ sfxtime = $2a                   ; voice 3 effect: frames left
 dbg_space = $8e                 ; debug: non-zero presses space once loaded
 dbg_auto = $8f                  ; debug: non-zero plays by itself
 
-*=$e000
+*=mb+$2000
         incasm "modhead.asm"
         incasm "chars.asm"
 
-*=$e800
+*=mb+$2800
 
 ; ------------------------------------------------------------
 ; init  once, the screen off: set up, draw, start the music
@@ -91,12 +94,7 @@ init    jsr gk_musinit          ; first: the header is characters 0-3
         sta $d021
         sta dbg_space
         sta dbg_auto
-        lda $dd02
-        ora #3
-        sta $dd02
-        lda $dd00
-        and #$fc                ; vic bank 3
-        sta $dd00
+        jsr gk_bank             ; vic bank 3 (2 where a tool moved it)
         lda #d018v
         sta $d018
         lda #$08

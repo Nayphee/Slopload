@@ -37,11 +37,14 @@
         incasm "abi.asm"
 
 ; ---- memory ----
-scra = $e400                    ; one screen: the kit's two are the same
+mb = $c000                      ; the module's VIC bank, as built (bank 3); a tool
+                                ; moves a module a bank down for a chain: every
+                                ; address in the bank is mb+ (its relocations)
+scra = mb+$2400                    ; one screen: the kit's two are the same
 scrb = scra
 d018v = $98                     ; screen $e400, characters $e000
-chr = $e000                     ; the character set
-bgmap = $fc00                   ; every cell's code under the soft sprites: rows
+chr = mb+$2000                     ; the character set
+bgmap = mb+$3c00                   ; every cell's code under the soft sprites: rows
                                 ; 1-23 ($fc28-$ffbf; rows 0 and 24 never used, so
                                 ; the code may run into its first 40 bytes)
 bgk = (bgmap-scra)/256          ; ... its pages from the screen's
@@ -166,7 +169,7 @@ bnext = $65                     ; ... then: the title (0) or the serve (1)
 dbg_space = $8e                 ; debug: non-zero presses space once loaded
 dbg_auto = $8f                  ; debug: 1 plays until the program is in, 2 never loses
 
-*=$cda0                         ; the fade (every module's tune fades out at the
+*=mb+$0da0                         ; the fade (every module's tune fades out at the
 lowpart                         ; end) and its scratch, and the sound effects: a
         incasm "fadekit.asm"    ; second part, past SlopLoad's player at $c000
         incasm "fadescr.asm"    ; (tools/build.py splits it off)
@@ -244,12 +247,12 @@ e_over = *-sfxdat               ; game over: down, slowly
 
 lowend
 
-*=$e000
+*=mb+$2000
 mainpart
         incasm "modhead.asm"
         incasm "chars.asm"
 
-*=$e800
+*=mb+$2800
 
 ; ------------------------------------------------------------
 ; init  once, the screen off: set up, draw, start the music
@@ -267,12 +270,7 @@ init    jsr gk_musinit          ; first: the header is characters 0-3
         sta $d021
         sta dbg_space
         sta dbg_auto
-        lda $dd02
-        ora #3
-        sta $dd02
-        lda $dd00
-        and #$fc                ; vic bank 3
-        sta $dd00
+        jsr gk_bank             ; vic bank 3 (2 where a tool moved it)
         lda #d018v
         sta $d018
         lda #$18

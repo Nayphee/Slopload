@@ -2,7 +2,7 @@
 ; characters 4-124 (0-3 hold the module header, at $e000; 125-127,
 ; never shown, hold crossy.asm's own bytes)
 
-*=$e020
+*=mb+$2020
 charset4
         byte $00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00
         byte $00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00

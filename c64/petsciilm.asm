@@ -191,7 +191,7 @@ menu    ldx #$ff
         jmp @any
 @n      cmp #'1'
         bcc @k
-        cmp #'9'+1
+        cmp #'8'+1
         bcs @k
         and #15                 ; 1-9: its line
         pha
@@ -207,7 +207,7 @@ menu    ldx #$ff
         bcc menu
 @any    jsr anykey
         jmp menu
-acts    word ascreen,amsg,arow,aspeed,acols,acount,afont,achain,asound
+acts    word ascreen,amsg,arow,aspeed,acols,acount,afont,asound
 
 ; adisk  @: a drive [8], then its status and commands, and $ its files
 ; (disk.asm, as SlopLoad 64's @)
@@ -366,16 +366,7 @@ mdraw   jsr look
         ldx #<fnlen
         ldy #>fnlen
         jsr prfile
-@k2     lda #8                  ; 8 a chain's first (at $a000), or not
-        jsr item0
-        ldx #<tx_chno
-        ldy #>tx_chno
-        lda chmask
-        beq @c8
-        ldx #<tx_chyes
-        ldy #>tx_chyes
-@c8     jsr print
-        lda #9                  ; 9 the sound: the music, or the screech
+@k2     lda #8                  ; 8 the sound: the music, or the screech
         jsr item0
         ldx #<tx_snmus
         ldy #>tx_snmus
@@ -806,25 +797,7 @@ awrite  jsr needscr
         sec
 @x      rts
 
-; ------------------------------------------------------------
-; achain  8: the module first in a chain (SlopLoad 64's line 3, a second
-; module after it; slopload.py's -then)? Then written at $a000, not
-; $e000: clear of a picture module's $c000-$ffbf
-; ------------------------------------------------------------
-achain  lda chmask              ; 1 at $e000, 2 at $a000 (first in a chain)
-        beq @a
-        lda #1
-@a      ldx #<q_chain
-        ldy #>q_chain
-        jsr ask12
-        beq @s
-        lda #$40
-@s      sta chmask
-        clc
-        rts
-chmask  byte 0                  ; $40: at $a000 (each address's high byte $40 less)
-
-; asound  9: the sound while it loads: the music (if the tape has a tune),
+; asound  8: the sound while it loads: the music (if the tape has a tune),
 ; or Novaload's screech (the module's flags' bit 2: each byte loaded as
 ; voice 1's pitch; a tune then waits for a second module, or is cut off)
 asound  lda snd
@@ -835,29 +808,6 @@ asound  lda snd
         clc
         rts
 snd     byte 0                  ; 1: the screech
-
-; creloc  the main part moved to $a000 and back (chmask $40; 0: nothing):
-; the 149 bytes the two builds differ in, PETSCII-Load's addresses' high
-; bytes, eor $40 (tools/c64build.py: lmrlo, lmrhi)
-;   uses: a, x, y, t0, t1
-creloc  lda chmask
-        beq @x
-        ldx #0
-@r      lda #<lmmain
-        clc
-        adc lmrlo,x
-        sta t0
-        lda #>lmmain
-        adc lmrhi,x
-        sta t1
-        ldy #0
-        lda (t0),y
-        eor #$40
-        sta (t0),y
-        inx
-        cpx #lmnrel
-        bne @r
-@x      rts
 
 ; wsave  with a message: the rows next to it kept and cleared where they
 ; aren't empty (said); its row's colours kept and the edited ones put in
@@ -1360,13 +1310,11 @@ name    ldx #<q_out
         jsr wcreate
         bcc @go
         rts
-@go     jsr creloc          ; (a chain's first: built at $a000)
-        ldx #3
+@go     ldx #3
         jsr chkout
         lda #<lmmaddr           ; the main part: its address and length,
         jsr chrout              ; its bytes, the message
         lda #>lmmaddr
-        eor chmask
         jsr chrout
         lda #<lmmlen
         clc
@@ -1405,7 +1353,30 @@ name    ldx #<q_out
         sty cnt
         ldy #>1000
         jsr wrmap
-        jsr creloc              ; (back to $e000)
+        lda #0                  ; its relocations (MODULES.md, "A module that
+        jsr chrout              ; moves"): at $0000, their length, the main
+        jsr chrout              ; part's (lmrel), 0 for the font's and the
+        lda #<(lmreln+2)        ; screen's, no bank bytes
+        clc
+        adc fok
+        php
+        jsr chrout
+        plp
+        lda #>(lmreln+2)
+        adc #0
+        jsr chrout
+        lda #<lmrel
+        ldx #>lmrel
+        ldy #<lmreln
+        sty cnt
+        ldy #>lmreln
+        jsr wrblk
+        lda #0
+        ldx fok
+        beq @f
+        jsr chrout
+@f      jsr chrout
+        jsr chrout
         jsr wclose
         bcs @x
         ldx #<tx_blocks
@@ -2125,22 +2096,17 @@ tl4     text "speed     ",0
 tl5     text "colours   ",0
 tl6     text "counter   ",0
 tl7     text "font      ",0
-tl8     text "chain     ",0
-tl9     text "sound     ",0
+tl8     text "sound     ",0
+tl9     = tl8                   ; (no line 9)
 tl10    text "write the module",0
 tl11    text "show it",0
 tl12    text "@ disk",0
-tx_chno text "no: at $e000",0
-tx_chyes text "first in a chain: at $a000",0
-q_chain text "where it goes:",13,"  1 at $e000 (on its own)",13
-        text "  2 at $a000: first in a chain, clear",13,"    of a picture after it",13
-        text "    (slopload 64's second module)",13,"which [",0
 tx_pxf  text " pixels a frame",0
 tx_asscr text "as on the screen",0
 tx_edited text "edited",0
 tx_crow text "row ",0
 tx_ccol text ", column ",0
-tx_mkeys text 155,"1-9: change  s: show  @: disk  q: quit",13,"return: write the module",30,0
+tx_mkeys text 155,"1-8: change  s: show  @: disk  q: quit",13,"return: write the module",30,0
 tx_snmus text "the music (if any)",0
 tx_snscr text "novaload's screech",0
 q_snd   text "the sound while it loads:",13,"  1 the music, if the tape has a tune",13,"  2 novaload's screech: each loaded",13,"    byte played as it comes (a tune",13,"    waits for a second module, or is",13,"    cut off)",13,"which [",0

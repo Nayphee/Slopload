@@ -7,15 +7,16 @@
 ; ------------------------------------------------------------
 
 ; ---- the files chosen ----
-gok     byte 0                  ; a game read and checked
+gok     = dnum+1                ; a game read and checked ($033a)
 gdev    byte 8
 gnlen   byte 0
 gname   byte 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
-mok     byte 0                  ; a tune (1), or one refused (2: mwhy)
+mok     = gok+1                 ; a tune (1), or one refused (2: mwhy)
 mdev    byte 8
 mnlen   byte 0
 mname   byte 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
-hpool   byte 0                  ; the high pool holds: 0 nothing, 1 the game
+hpool   = mearly+1              ; the high pool holds: 0 nothing, 1 the game,
+                                ; 2 the game a VIC bank down (gmove)
 
 ; ---- the game (in the high pool) ----
 gnp     byte 0                  ; its parts (the main one first)
@@ -33,6 +34,9 @@ gbord   byte 0                  ; its header's +27: bit 0 it leaves the border
                                 ; to the loader (the lines on through it), bit 1
                                 ; it makes effects on voice 3 (SlopLoad's player)
 gentry  word 0,0,0              ; init, frame, stop
+grel    word 0                  ; its relocations' place in the pool (high 0: none)
+grln    word 0                  ; ... their length
+gflen   word 0                  ; its file's length
 gorig   byte 0,0,0,0,0,0,0,0,0  ; its header's +16 to +24, as read
 
 ; ---- the tune (in the music pool) ----
@@ -49,51 +53,84 @@ mppal   word 0                  ; time between play calls (1/64 lines): PAL
 mpntsc  word 0                  ; ... NTSC
 mcyc    word 0                  ; its longest play call, cycles
 mzp     byte 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
-mnws    byte 0                  ; its workspace: runs (lo, hi exclusive)
-mws     byte 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
-        byte 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
-mnrel   word 0                  ; a prepared tune's relocations (at mrel): 0 can't move
-mtitle  byte 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
+mnrel   = $03ee                 ; a prepared tune's relocations (at mrel): 0 can't
+                                ; move (2; past c2ins)
 mwhy    byte 0                  ; why it was refused (a reason number)
 mwhya   word 0                  ; ... and the address in it
 mpool   = mpoolp*256            ; the tune's bytes: mpool + its offset in its page
 
 ; ------------------------------------------------------------
 ; ldgame  the game fdev/fname read into the high pool and checked: its
-; parts, entry points, claim, jitter and share
+; parts, entry points, claim, jitter and share, and where its
+; relocations are (MODULES.md, "A module that moves")
 ;   out:  c set if it can't be (said); gok
 ; ------------------------------------------------------------
 ldgame  lda #0
         sta gok
         sta hpool
+        sta gmvd
         jsr tohigh
         bcc @r
         rts
 @r      lda #1
         sta hpool
-        lda #<hpbase            ; the parts: address, length, bytes
+
+; gparse  ... the module in the pool (hplen bytes) parsed: its fields
+; (gmvd 1: moved a VIC bank down, gmove's: its claim to the end $c000)
+gparse  lda #<hpbase            ; the parts: address, length, bytes
         sta p1
         lda #>hpbase
         sta p1+1
-        lda flen                ; t4/t5: the file's end in the pool
+        lda hplen               ; t4/t5: the file's end in the pool
+        sta gflen
         clc
         adc #<hpbase
         sta t4
-        lda flen+1
+        lda hplen+1
+        sta gflen+1
         adc #>hpbase
         sta t5
         lda #0
         sta gnp
-@p      lda p1                  ; at the end?
-        cmp t4
-        lda p1+1
-        sbc t5
-        bcs @end
-        ldx gnp
+        sta grel+1
+@p      lda t4                  ; at the end? (under 4 bytes left: a file
+        sec                     ; read to the pool's end, flong)
+        sbc p1
+        tax
+        lda t5
+        sbc p1+1
+        bne @in
         cpx #4
-        bcc @bq3
-        jmp @bad
-@bq3
+        bcs @in
+        jmp @end
+@in     ldy #1                  ; at $0000: its relocations, last
+        jsr hget
+        dey
+        sta t0
+        jsr hget
+        ora t0
+        bne @pa
+        ldy #2
+        jsr hget
+        sta grln
+        iny
+        jsr hget
+        sta grln+1
+        lda p1                  ; (the rest of the file: theirs)
+        clc
+        adc #4
+        sta grel
+        lda p1+1
+        adc #0
+        ldx flong               ; (not all read: none)
+        beq @rk
+        lda #0
+@rk     sta grel+1
+        jmp @end
+@bd     jmp @bad
+@pa     ldx gnp
+        cpx #4
+        bcs @bd
         ldy #0
         jsr hget
         sta gpal,x
@@ -122,18 +159,14 @@ ldgame  lda #0
         lda p1+1
         adc gplh,x
         sta p1+1
-        bcc @bq4
-        jmp @bad
-@bq4
+        bcs @bd
         inc gnp
         lda t4                  ; within the file?
         cmp p1
         lda t5
         sbc p1+1
-        bcs @p
-        bcs @bq5
-        jmp @bad
-@bq5
+        bcc @bd
+        jmp @p
 @end    lda gnp                 ; the main part: PLG1, 32 bytes or more
         bne @bq6
         jmp @bad
@@ -212,9 +245,13 @@ ldgame  lda #0
         lda t1
         sta gclmh
         jmp @cl
-@full   lda #<$ffff             ; (to the end: past the loader's vectors)
-        sta gclml
-        lda #>$ffff
+@full   ldx #<$ffff             ; (to the end: past the loader's vectors;
+        lda #>$ffff             ; moved a bank down, to $c000)
+        ldy gmvd
+        beq @f2
+        ldx #0
+        lda #$c0
+@f2     stx gclml
         sta gclmh
 @cl     jsr gclaims             ; clear of the loader's memory?
         lda #<lmcl
@@ -265,12 +302,15 @@ tohigh  lda #<hpbase
         lda flen+1
         sta hplen+1
         rts
-hplen   word 0
+hplen   = mnrel+2               ; (2)
 
 ; gclaims  lmcl: the game's claims, the main part to its claim's end,
-; the others as they are
+; the others as they are; gcmv 1: as they would be a VIC bank down (its
+; fields kept): each at $c000 or above $4000 lower (to the end, $ffff:
+; $c000), gself one if one is on another
 gclaims lda #0
         sta lmcl
+        sta gself
         ldx #0
 @p      cpx gnp
         bcs @x
@@ -292,7 +332,30 @@ gclaims lda #0
         lda gpah,x
         adc gplh,x
         sta t3
-@a      stx t6
+@a      lda gcmv
+        beq @in
+        lda t1
+        cmp #$c0
+        bcc @sf
+        sbc #$40
+        sta t1
+        lda t2
+        and t3
+        cmp #$ff
+        bne @m
+        lda #0
+        sta t2
+        sta t3
+@m      lda t3
+        sec
+        sbc #$40
+        sta t3
+@sf     lda #<lmcl
+        ldy #>lmcl
+        jsr rovl
+        bcc @in
+        inc gself
+@in     stx t6
         lda #<lmcl
         ldy #>lmcl
         jsr ladd
@@ -525,27 +588,7 @@ ldslm   lda #2
         lda mnrel
         ora mnrel+1
         beq @skip
-        lda #<mrel
-        sta p1
-        lda #>mrel
-        sta p1+1
-        lda p2
-        pha
-        lda p2+1
-        pha
-        lda t2
-        pha
-        lda t3
-        pha
-        jsr copyn
-        pla
-        sta t3
-        pla
-        sta t2
-        pla
-        sta p2+1
-        pla
-        sta p2
+        jsr mgaps
 @skip   lda p2                  ; past them
         clc
         adc t2
@@ -647,18 +690,32 @@ lbusy   byte 3                  ; ... and i/o: no tune there
         word $0000,$0800,$d000,$e000,$fffa,$ffff
 lbusyws byte 3                  ; a tune's workspace: not these
         word $0000,$0200,$0400,$0800,$fffa,$ffff
-lmcl    byte 0                  ; the game's claims: a module's 4 at most, and
-        word 0,0,0,0,0,0,0,0    ; a chain's second module's 4 beside them (8:
-        word 0,0,0,0,0,0,0,0    ; with 4, the second's ran on into lmus)
-lmus    byte 0                  ; the tune and its workspace (17)
-        word 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
-lban    byte 0                  ; place_show's: loader, i/o (3), the tune (17),
-        word 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
-        word 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0   ; the modules (8): 28
-lclaim  byte 0                  ; the claims: the program there loads after
-        word 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
-        word 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0     ; (26: the modules' 8, the
-maxclaim = 26                   ; tune's 17, one spare)
+; the lists past the program, after a tune's relocations (lsts, files.asm;
+; a count, then lo/hi pairs: 4 bytes an entry); bsave (chain.asm) after
+; the KERNAL header
+lban    = lsts                  ; place_show's: loader, i/o (3), the tune (17),
+                                ; the modules (8): 28
+lmus    = lban+1+4*28           ; the tune and its workspace (17)
+lclaim  = lmus+1+4*17           ; the claims: the program there loads after (26:
+maxclaim = 26                   ; the modules' 8, the tune's 17, one spare)
+lmcl    = lclaim+1+4*maxclaim   ; the game's claims: a module's 4 at most, and a
+                                ; chain's second module's 4 beside them (8)
+lbcl    = lmcl+1+4*8            ; the chain's second's (chain.asm): 8
+bhdr    = lbcl+1+4*8            ; ... and its header (32)
+lstsend = bhdr+32
+mnws    = lstsend               ; a tune's workspace: runs (lo, hi exclusive): 16
+mws     = mnws+1
+chmv    = mws+64                ; chain.asm's
+blok    = chmv+1
+blst    = blok+1
+rnext   = blst+2
+rptr    = rnext+2
+rpart   = rptr+2
+hpwant  = rpart+1               ; (hpready's: what the pool should hold)
+gmvd    = hpwant+1              ; (gparse's: the module in the pool moved)
+gcmv    = gmvd+1                ; (gclaims': its claims a bank down)
+mtitle  = gcmv+1                ; a tune's name (32)
+bufsend = mtitle+32
 
 ; rovl  c set if the range t0/t1-t2/t3 overlaps one in the list at a/y
 ;   uses: a, y, p3 (the range kept)
@@ -1078,38 +1135,36 @@ mmove   lda mat+1
         sta p3
         lda #>mrel
         sta p3+1
-        lda mnrel
-        sta t4
-        lda mnrel+1
-        sta t5
-@r      lda t4
-        ora t5
-        beq @e
-        ldy #0                  ; its offset: the tune's byte at the pool
-        lda (p3),y              ; + mload's offset in its page
-        clc
-        adc mload
+        lda mload               ; p1: the tune's first byte in the pool (at
+        sec                     ; mload's offset in its page), less one
+        sbc #1
         sta p1
-        iny
-        lda (p3),y
-        adc #>mpool
+        lda #>mpool
+        sbc #0
         sta p1+1
         ldy #0
+@r      lda (p3),y              ; each gap (mgaps'), to 0
+        beq @e
+        inc p3
+        bne @1
+        inc p3+1
+@1      cmp #255
+        bne @g
+        lda #254
+        jsr @adv
+        jmp @r
+@g      jsr @adv
         lda (p1),y
         clc
         adc t6
         sta (p1),y
-        lda p3
-        clc
-        adc #2
-        sta p3
-        bcc @d
-        inc p3+1
-@d      lda t4
-        bne @d2
-        dec t5
-@d2     dec t4
         jmp @r
+@adv    clc
+        adc p1
+        sta p1
+        bcc @a
+        inc p1+1
+@a      rts
 @e      lda minit+1
         clc
         adc t6
@@ -1123,6 +1178,85 @@ mmove   lda mat+1
         lda mat+1
         sta mload+1
         rts
+
+; mgaps  mrel: a prepared tune's relocations (mnrel words at p2, its
+; offsets in order) as gaps, each from the last (from -1; 255: 254 on,
+; none there), 0 at the end; none (mnrel 0) if they aren't in order
+;   uses: a, x, y, p1, p3, t0, t1, t4, t5 (p2, t2, t3 kept)
+mgaps   lda #<mrel
+        sta p1
+        lda #>mrel
+        sta p1+1
+        lda p2
+        sta p3
+        lda p2+1
+        sta p3+1
+        lda mnrel
+        sta t4
+        lda mnrel+1
+        sta t5
+        lda #0                  ; t0/t1: the last, plus one
+        sta t0
+        sta t1
+@r      lda t4
+        ora t5
+        beq @e
+        ldy #0                  ; this one less that: the gap, less one
+        lda (p3),y
+        sec
+        sbc t0
+        tax
+        iny
+        lda (p3),y
+        sbc t1
+        bcc @no                 ; (before the last: not in order)
+@g      bne @big
+        cpx #254
+        bcc @sm
+@big    pha                     ; 255: 254 on
+        lda #255
+        jsr @put
+        txa
+        sec
+        sbc #254
+        tax
+        pla
+        sbc #0
+        jmp @g
+@sm     inx
+        txa
+        jsr @put
+        ldy #0
+        lda (p3),y
+        clc
+        adc #1
+        sta t0
+        iny
+        lda (p3),y
+        adc #0
+        sta t1
+        lda p3
+        clc
+        adc #2
+        sta p3
+        bcc @d
+        inc p3+1
+@d      lda t4
+        bne @d2
+        dec t5
+@d2     dec t4
+        jmp @r
+@no     lda #0
+        sta mnrel
+        sta mnrel+1
+        rts
+@e      lda #0
+@put    ldy #0
+        sta (p1),y
+        inc p1
+        bne @p
+        inc p1+1
+@p      rts
 
 ; ------------------------------------------------------------
 ; plshow  place_show: the show module's address (sbase), the tune alone
@@ -1230,7 +1364,7 @@ sfirst  byte 0
 sfound  byte 0
 sbest   byte 0,0,0
 sbase   word 0
-muse    byte 0                  ; a tune on the tape
+muse    = hplen+2               ; a tune on the tape
 
 ; ------------------------------------------------------------
 ; shshare  the loader's share beside a show's tune (c64model.show_share):
@@ -1491,21 +1625,54 @@ shset   lda #1
         rts
 
 ; hpready  the high pool holding the module, for a module (read again
-; if the show module was put over it)
+; if the show module was put over it), a VIC bank down for a chain that
+; needs it (chmv 1: gmove, hpool 2), and a moved second's relocations
+; after it (chmv 2: blok)
 ;   out:  c set on an error (said)
 hpready lda opt_show
         cmp #1
         bne @ok
+        ldx #1
+        lda bok
+        beq @w
+        lda chmv
+        cmp #1
+        bne @w
+        inx
+@w      stx hpwant
+        cpx hpool
+        beq @bl
         lda hpool
         cmp #1
+        beq @mv                 ; (read: to move)
+        jsr hpread
+        bcs @x
+        lda hpwant
+        cmp #2
+        bne @bl
+@mv     jsr gmove
+        bcs @x
+        lda #2
+        sta hpool
+@bl     lda bok                 ; a moved second's relocations
         beq @ok
-        lda gdev
+        lda chmv
+        cmp #2
+        bne @ok
+        lda blok
+        bne @ok
+        jsr blread              ; (put over: read again, then the first)
+        bcc hpready
+        rts
+@ok     clc
+@x      rts
+
+; hpread  the module read again (gdev/gnlen)
+hpread  lda gdev
         ldx #<gnlen
         ldy #>gnlen
         jsr setfn
         jmp ldgame
-@ok     clc
-        rts
 
 ; setfn  fdev a, fnlen/fname from the length and name at x/y
 setfn   sta fdev
@@ -1866,9 +2033,20 @@ mfirst  lda #0
         lda gbord
         and #$10
         beq @no
-        ldx #<tx_mfr            ; (room?)
-        ldy #>tx_mfr
+        ldx #<tx_mfr            ; (room? a moved second's relocations
+        ldy #>tx_mfr            ; after the module too)
         lda hplen+1
+        ldx chmv
+        cpx #2
+        bne @r1
+        lda hplen
+        clc
+        adc brln
+        lda hplen+1
+        adc brln+1
+        bcc @r1
+        lda #$ff                ; (past $ffff)
+@r1     ldx #<tx_mfr            ; (y: still its high byte)
         cmp #>(showbuf-hpbase)
         bcs @no
         jsr mlist
@@ -1907,7 +2085,7 @@ mfirst  lda #0
         pla
         tax
         jmp print
-mearly  byte 0                  ; 1: the music first
+mearly  = muse+1                ; 1: the music first
 nboot   byte 0                  ; ... the parts before the module's: the tune, its player
 stgent  word 0,0,0              ; ... its player's init, frame, stop
 stgshr  byte 0                  ; ... and the loader's share beside it
@@ -2204,17 +2382,20 @@ shbuild lda #<showtmp           ; the module, moved
         sec
         sbc #>showbase
         sta t6
-        ldx #0
-@r      cpx #nshowrel
-        bcs @hd
-        lda showrello,x
-        sta p1
-        lda showrelhi,x
-        clc
-        adc #>showtmp
+        lda #<(showtmp-1)       ; (its relocations: each a gap from the
+        sta p1                  ; last, 0 the end)
+        lda #>(showtmp-1)
         sta p1+1
+        ldx #0
         ldy #0
-        lda (p1),y
+@r      lda showrel,x
+        beq @hd
+        clc
+        adc p1
+        sta p1
+        bcc @n
+        inc p1+1
+@n      lda (p1),y
         clc
         adc t6
         sta (p1),y
@@ -2288,9 +2469,13 @@ showtmp = $b000                 ; the module made here, then to showbuf (the tun
 
 ; toshow  the module from showtmp to showbuf (the high pool); a game
 ; reaching that far there is read again when it's wanted
-toshow  lda hpool
-        cmp #1
-        bne @c
+toshow  lda opt_show             ; (not a module's: over a moved second's
+        cmp #1                  ; relocations, perhaps)
+        beq @k
+        lda #0
+        sta blok
+@k      lda hpool
+        beq @c
         lda hplen+1
         cmp #>(showbuf-hpbase)
         bcc @c

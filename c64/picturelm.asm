@@ -1376,7 +1376,8 @@ mkmod   ldx #77
         ldx edraw
         beq @dw
         ora #$40
-@dw     sta lmhead+27
+@dw     ora #$80                ; (bit 7: it carries its relocations)
+        sta lmhead+27
         lda nspr
         beq @ns
         jsr mkhead
@@ -1510,7 +1511,45 @@ awrite  jsr needpic
         lda #<sprn
         ldx #>sprn
         jsr wrblk
-@cl     jsr wclose
+@cl     lda #0                  ; its relocations (MODULES.md, "A module that
+        sta p2hd                ; moves"): at $0000, their length; the show
+        sta p2hd+1              ; module's, the colours' place (+77) among
+        lda #<pmlen0            ; them with colours; none in the second
+        ldx #>pmlen0            ; part; +25, the VIC's bank, one more a bank
+        ldy colat+1             ; down
+        beq @l0
+        lda #<pmlen1
+        ldx #>pmlen1
+@l0     sta p2hd+2
+        stx p2hd+3
+        jsr wr4
+        lda #<pmrpn
+        sta cnt
+        ldy #>pmrpn
+        lda #<pmrp
+        ldx #>pmrp
+        jsr wrblk
+        ldx colat+1
+        bne @w
+        lda #<pmon
+        sta cnt
+        ldy #>pmon
+        lda #<pmo
+        ldx #>pmo
+        bne @m                  ; (x: a page's number: never 0)
+@w      lda #<pmwn
+        sta cnt
+        ldy #>pmwn
+        lda #<pmw
+        ldx #>pmw
+@m      jsr wrblk
+        lda #<pmrsn
+        sta cnt
+        ldy #>pmrsn
+        lda #<pmrs
+        ldx #>pmrs
+        jsr wrblk
+        jsr wclose
         bcs @x
         ldx #<tx_after
         ldy #>tx_after

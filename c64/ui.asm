@@ -654,10 +654,12 @@ agame   ldx #<tx_mod0
         lda #0
         sta gok
         sta bok
+        sta chmv
         sta opt_gopt
 @x0     rts
 @rd     lda #0                  ; (a new first: no second)
         sta bok
+        sta chmv
         ldx #<tx_reading
         ldy #>tx_reading
         jsr print

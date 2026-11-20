@@ -187,9 +187,10 @@ plan    lda #0
 @x      rts
 
 tx_bnone text "the program loads where the modules",13,"are: the second would show for no time",13,0
-nbootb  byte 0                  ; the music first: the boot's blocks (the tune, its player)
-ndrawb  byte 0                  ; a picture drawn in: its first block loaded after it starts
-nhand   byte 0                  ; ... and the module's after them: its player hands over
+nbootb  = hpool+1                ; the music first: the boot's blocks (the tune, its player)
+ndrawb  = nbootb+1              ; a picture drawn in: its first block loaded after it starts
+nhand   = ndrawb+1              ; ... and the module's after them: its player hands over
+                                ; (the three in the tape buffer's spare bytes: setup.asm's)
 
 ; liveblk  a game's header +26: the disk blocks its counter counts down,
 ; those that load while it runs (all the program's, unless some of it

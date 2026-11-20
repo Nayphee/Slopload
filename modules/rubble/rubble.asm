@@ -30,11 +30,14 @@
         incasm "abi.asm"
 
 ; ---- memory ----
-scra = $e400                    ; one screen: the kit's two are the same
+mb = $c000                      ; the module's VIC bank, as built (bank 3); a tool
+                                ; moves a module a bank down for a chain: every
+                                ; address in the bank is mb+ (its relocations)
+scra = mb+$2400                    ; one screen: the kit's two are the same
 scrb = scra
 d018v = $98                     ; screen $e400, characters $e000
-chr = $e000                     ; the character set
-sprblk = $e800                  ; the plane's frames (64 bytes each)
+chr = mb+$2000                     ; the character set
+sprblk = mb+$2800                  ; the plane's frames (64 bytes each)
 sprp0 = $a0                     ; ... their first pointer: ($e800 - $c000) / 64
 sprptr = scra+$3f8              ; sprite 0's pointer
 
@@ -136,7 +139,7 @@ dbg_space = $8e                 ; debug: non-zero presses space once loaded
 dbg_auto = $8f                  ; debug: 1 plays until the program is in, 2 never gives up
 th = $50                        ; the blocks' heights in rows (even: two a storey), 16
 
-*=$e000
+*=mb+$2000
         incasm "modhead.asm"
         incasm "chars.asm"
 
@@ -161,12 +164,7 @@ init    jsr gk_musinit          ; first: the header is characters 0-3
         sta $d017               ; the sprite: normal size, in front
         sta $d01d
         sta $d01b
-        lda $dd02
-        ora #3
-        sta $dd02
-        lda $dd00
-        and #$fc                ; vic bank 3
-        sta $dd00
+        jsr gk_bank             ; vic bank 3 (2 where a tool moved it)
         lda #d018v
         sta $d018
         lda #$18

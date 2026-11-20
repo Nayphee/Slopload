@@ -28,7 +28,10 @@
         incasm "abi.asm"
 
 ; ---- the standard parts (src/modhead.asm, src/modkit.asm) ----
-g_claim = $fc00                 ; end of the memory claimed
+mb = $c000                      ; the module's VIC bank, as built (bank 3); a tool
+                                ; moves a module a bank down for a chain: every
+                                ; address in the bank is mb+ (its relocations)
+g_claim = mb+$3c00                 ; end of the memory claimed
 g_jitter = 48                   ; worst edge timing jitter (tests/jitter.py)
 g_border = 1                    ; it leaves the border to the loader (gk_bord)
 g_sfx = 1                       ; it makes effects on voice 3 (beside SlopLoad's player)
@@ -42,11 +45,11 @@ c_digit0 = 48                   ; (plain ascii codes: see mkdata.py)
 c_pct = 37
 
 ; ---- memory ----
-scra = $f400
-scrb = $f800
+scra = mb+$3400
+scrb = mb+$3800
 d018a = $d8                     ; screen $f400, charset $e000
 d018b = $e8                     ; screen $f800
-chrset = $e000
+chrset = mb+$2000
 bset0 = 2                       ; bird characters: set 0 2-10, set 1 11-19
 bset1 = 11
 
@@ -147,7 +150,7 @@ spc = $8b                       ; 1: space held (start key)
 dbg_space = $8e                 ; debug: non-zero presses space once loaded
 dbg_auto = $8f                  ; debug: non-zero plays by itself
 
-*=$cd90                         ; the fade (every module's tune fades out at the
+*=mb+$0d90                         ; the fade (every module's tune fades out at the
 lowpart                         ; end) and its scratch, the effects, drawall: a second
         incasm "fadekit.asm"    ; part, past SlopLoad's player at $c000
         incasm "fadescr.asm"    ; (tools/build.py splits it off)
@@ -266,12 +269,12 @@ drawall ldx #0
 
 lowend
 
-*=$e000
+*=mb+$2000
 mainpart
         incasm "modhead.asm"
         incasm "chars.asm"
 
-*=$e400
+*=mb+$2400
 
 ; ------------------------------------------------------------
 ; init  set up screen and sound; called once
@@ -283,12 +286,7 @@ init    jsr gk_musinit          ; before the bird's characters (2-3) are
         sta dbg_auto
         lda #$0b
         sta $d011
-        lda $dd02
-        ora #3
-        sta $dd02
-        lda $dd00
-        and #$fc                ; vic bank 3
-        sta $dd00
+        jsr gk_bank             ; vic bank 3 (2 where a tool moved it)
         lda #0
         jsr gk_bord
         sta $d023               ; black outlines

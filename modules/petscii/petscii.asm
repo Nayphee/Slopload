@@ -65,18 +65,21 @@
 ; The fade is the kit's (src/fadekit.asm, OZ GOLD's too).
 ;
 ; Memory: $bc00-$bfe7 and $e000 to modend (and the font's part, if
-; there is one: $b000 or $b800 on). Zero page $10-$32. In a chain
-; (slopload.py -then, petscii.py -chain) the main part is at $a000
-; (petbase), clear of a picture module's $c000-$ffbf.
+; there is one: $b000 or $b800 on). Zero page $10-$32. In a chain the
+; tools move the main part a VIC bank down where they must, to $a000
+; (its relocations: tools/build.py builds it a second time with petbase
+; $a000 to find them); the screen and the font stay in bank 2, and
+; second after another screen at $bc00 its own loads aside and is copied
+; in at the switch (LMFORMAT.md).
 ; ------------------------------------------------------------
         incasm "abi.asm"
 
 ; ---- memory ----
-petbase = $e000                 ; the main part (tools/petscii.py: $a000 in a chain,
-                                ; clear of a picture's $c000-$ffbf)
+petbase = $e000                 ; the main part (tools/build.py: $a000 a bank lower,
+                                ; to find its relocations)
 scr = $bc00                     ; the screen: vic bank 2, beside the rom font
-lowat = scr                     ; (its part: the chain's build, at $a000, puts a
-                                ; copy lower, to assemble in order, and keeps $bc00's)
+lowat = scr                     ; (its part, which stays: the lower build puts a
+                                ; copy lower, to assemble in order)
 scra = scr                      ; (the kit's names for it)
 scrb = scr
 
