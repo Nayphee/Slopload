@@ -5,7 +5,28 @@
 ; from a screen buffer it draws over afterwards: boot.asm).
 ;   gk_musinit  copy the header's music fields (call first in init)
 ;   sidinit     the SID cleared, voice 3 ready for effects
+;   gk_bank     the VIC bank the module is in (3; 2 where a tool moved it)
 ; ------------------------------------------------------------
+
+; gk_bank  the VIC bank the module is in: bank 3 as built, 2 where a tool
+; moved it a bank down for a chain (its own address's high byte, one of
+; its relocations, says which); $dd00's bits
+;   uses: a
+gk_bank lda $dd02
+        ora #3
+        sta $dd02
+        lda #>gk_bank           ; ($c0-$ff: bank 3; $80-$bf: bank 2)
+        clc
+        rol a
+        rol a
+        rol a                   ; (its top two bits: the bank)
+        eor #3                  ; ($dd00's bits for it)
+        sta @b+1
+        lda $dd00
+        and #$fc
+@b      ora #0                  ; (the bits, written in)
+        sta $dd00
+        rts
 
 ; gk_musinit  the music's addresses, the tool's options and the
 ; program's blocks from the header (it may be drawn over later: a

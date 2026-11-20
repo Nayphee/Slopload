@@ -5,7 +5,7 @@ module (modules/petscii, PETSCII-Load).
 
     petscii.py SCREEN OUT.lm [-screen N] [-font FONT.64c] [-scroll TEXT]
                [-scrollrow N] [-scrollspeed N] [-scrollcolours HEX]
-               [-counter ROW,COL] [-screech] [-chain]  the module, for SlopLoad 64
+               [-counter ROW,COL] [-screech]          the module, for SlopLoad 64
     petscii.py SCREEN -info [-screen N]     what the file holds
 
 -font FONT.64c   the screen in a font of its own: a .64c file (as Petmate
@@ -33,10 +33,6 @@ module (modules/petscii, PETSCII-Load).
                  is each byte of the program as it loads. It has the SID:
                  a tune on the tape doesn't play beside it (one playing
                  already is cut off when the screen starts)
--chain           the module's main part at $A000, not $E000: for a chain
-                 (slopload.py -module A -then B), where the other module,
-                 a picture's, is at $C000-$FFBF (the PC tool does this by
-                 itself for a screen given as -module or -then)
 
 SCREEN is one of:
   .petmate  Petmate's own file (JSON): its first screen, or -screen N
@@ -289,11 +285,10 @@ def load_prg(path):
     return d[0] | d[1] << 8, d[2:]
 
 
-def template(chain=False):
+def template():
     """the PETSCII-Load module as built: (main address, bytes), (low address,
-    bytes); chain: its main part at $A000, for a chain (slopload.py -then),
-    clear of a picture module's $C000-$FFBF"""
-    main = os.path.join(MODS, 'petscii_chain.prg' if chain else 'petscii.prg')
+    bytes)"""
+    main = os.path.join(MODS, 'petscii.prg')
     low = os.path.join(MODS, 'petscii_low.prg')
     if not (os.path.exists(main) and os.path.exists(low)):
         raise Bad("the PETSCII-Load module isn't built (run tools/build.py)")
@@ -340,23 +335,23 @@ def font_part(codes, msg=b'', counter=False, font=b''):
             {c: i for i, c in enumerate(order)}, FONT_D018[small])
 
 
-def module(scr, msg=b'', row=24, speed=2, counter=None, notes=None, colours=None, chain=False,
-           screech=False):
+def module(scr, msg=b'', row=24, speed=2, counter=None, notes=None, colours=None, screech=False):
     """the module with this screen in it, and a scrolling message (screen
     codes) and a counter (row, column) if given: [(address, bytes)], the
     main part first, then a font of its own (font_part) if it has one,
     then the screen's codes. colours: the message's row's colours for
     columns 1-39 (39 of them) instead of the screen's. The rows next to
     the message are cleared (clear_next); notes, a list, gets what was
-    cleared and the font's characters. chain: the main part at $A000
-    (template). screech: Novaload's loading noise (the flags' bit 2)"""
+    cleared and the font's characters. screech: Novaload's loading noise
+    (the flags' bit 2). In a chain the tools move it a VIC bank down where
+    they must (relocs)"""
     check(scr, msg, row, speed, counter, colours)
     if msg:
         was = scr
         scr, gone = clear_next(scr, row)
         if gone and notes is not None:
             notes.append(cleared_note(was, row, gone))
-    (ma, md), (la, ld) = template(chain)
+    (ma, md), (la, ld) = template()
     if md[:4] != b'PLG1' or len(ld) != W * H or len(md) < EXT_AT + EXT_LEN:
         raise Bad("the PETSCII-Load module isn't the expected layout (rebuild it)")
     code = len(md) - (md[EXT_AT + 4] | md[EXT_AT + 5] << 8)    # (the template's own message off)
@@ -381,37 +376,47 @@ def module(scr, msg=b'', row=24, speed=2, counter=None, notes=None, colours=None
                                               len(msg), space, digit0)
     md[10:12] = struct.pack('<H', ma + len(md))         # the claim: to the message's end
     md[14] = SHARE[bool(msg)]
-    top = min([a for a, _ in fpart] + [la]) if chain else 0xfffa
-    if ma + len(md) > top:
-        raise Bad(f"the message is too long for the module's memory (${ma:04X}-${top - 1:04X}"
-                  + (", under the font's part" if chain and fpart else "") + ")")
+    if ma + len(md) > 0xfffa:
+        raise Bad(f"the message is too long for the module's memory (${ma:04X}-$FFF9)")
     return [(ma, bytes(md))] + fpart + [(la, bytes(codes))]
 
 
-def lm_bytes(parts):
-    """a .lm file (MODULES.md): each part's address, length and bytes"""
-    return b''.join(struct.pack('<HH', a, len(d)) + bytes(d) for a, d in parts)
+def lm_bytes(parts, rel=None):
+    """a .lm file (MODULES.md): each part's address, length and bytes, then
+    its relocations (lmreloc.py: rel, or relocs(parts) for one that module()
+    made)"""
+    import lmreloc as LR
+    return LR.join(parts, relocs(parts) if rel is None else rel)
 
 
-def read_lm(path):
-    """the parts of a .lm file"""
-    d = open(path, 'rb').read()
-    parts, i = [], 0
-    while i < len(d):
-        if i + 4 > len(d):
-            raise Bad(f"{os.path.basename(path)}: not a module (.lm): it ends inside a part's header")
-        a, n = struct.unpack('<HH', d[i:i + 4])
-        if i + 4 + n > len(d):
-            raise Bad(f"{os.path.basename(path)}: not a module (.lm): a part runs past its end")
-        parts.append((a, d[i + 4:i + 4 + n]))
-        i += 4 + n
+def read_lm(path, rel=False):
+    """the parts of a .lm file (rel: and its relocations, lmreloc.py's, or
+    None: (parts, relocations))"""
+    import lmreloc as LR
+    try:
+        parts, relocs = LR.split(open(path, 'rb').read())
+    except LR.Bad as ex:
+        raise Bad(f"{os.path.basename(path)}: not a module (.lm): {ex}")
     if not parts or parts[0][1][:4] != b'PLG1':
         raise Bad(f"{os.path.basename(path)}: not a module (.lm): no PLG1 header first")
     for i, (a, d) in enumerate(parts):
         for b, e in parts[i + 1:]:
             if max(a, b) < min(a + len(d), b + len(e)):
                 raise Bad(f"{os.path.basename(path)}: its parts at ${a:04X} and ${b:04X} overlap")
-    return parts
+    return (parts, relocs) if rel else parts
+
+
+def relocs(parts):
+    """the relocations (lmreloc.py: (lists, bank bytes)) of a module that
+    module() made: the template's own in its main part, up to its message;
+    the font's and the screen's parts stay (VIC bank 2, the ROM font's)"""
+    import lmreloc as LR
+    tp, trel = read_lm(os.path.join(MODS, 'petscii.lm'), rel=True)
+    if not LR.movable(tp, trel):
+        raise Bad("the PETSCII-Load module carries no relocations (rebuild it)")
+    md = tp[0][1]
+    code = len(md) - (md[EXT_AT + 4] | md[EXT_AT + 5] << 8)
+    return [[o for o in trel[0][0] if o < code]] + [[] for _ in parts[1:]], []
 
 
 def options(o, scr):
@@ -438,16 +443,14 @@ def options(o, scr):
                 colours=colours, screech=bool(o.get('-screech')))
 
 
-def main(argv):
-    if not argv or argv[0] in ('-h', '--help'):
-        print(__doc__)
-        return 1
+def parse(argv):
+    """the command line's options, as given, and its other arguments:
+    (options, the rest)"""
     opt = {'-screen': '0', '-scroll': None, '-scrollrow': None, '-scrollspeed': None, '-scrollcolours': None,
            '-counter': None, '-font': None}
     rest = []
-    chain = '-chain' in argv
     opt['-screech'] = '-screech' in argv
-    argv = [a for a in argv if a not in ('-chain', '-screech')]
+    argv = [a for a in argv if a != '-screech']
     i = 0
     while i < len(argv):
         if argv[i] in opt and i + 1 < len(argv):
@@ -456,7 +459,28 @@ def main(argv):
         else:
             rest.append(argv[i])
             i += 1
-    argv = rest
+    return opt, rest
+
+
+def made(path, opt, notes=None):
+    """the screen in the file path (its font given, if any) and the module
+    with it, for parse()'s options: (screen, parts). tools/build.py makes
+    a module that is a screen this way (modules/NAME/NAME.pet)"""
+    scr = read(path, int(opt['-screen']))
+    if opt['-font']:
+        scr = with_font(scr, opt['-font'])
+    return scr, module(scr, **options(opt, scr), notes=notes)
+
+
+def main(argv):
+    if not argv or argv[0] in ('-h', '--help'):
+        print(__doc__)
+        return 1
+    if '-chain' in argv:
+        print("petscii: -chain is gone: every module can be first or second in a chain now, and"
+              " the mastering tools move it where a chain needs it", file=sys.stderr)
+        return 1
+    opt, argv = parse(argv)
     try:
         scr = read(argv[0], int(opt['-screen']))
         if opt['-font']:
@@ -465,14 +489,14 @@ def main(argv):
         if len(argv) < 2 or argv[1] == '-info':
             return 0
         notes = []
-        parts = module(scr, **options(opt, scr), notes=notes, chain=chain)
+        parts = module(scr, **options(opt, scr), notes=notes)
     except (Bad, ValueError) as ex:
         print(f"petscii: {ex}", file=sys.stderr)
         return 1
     for n in notes:
         print(n)
     out = argv[1]
-    data = lm_bytes(parts)
+    data = lm_bytes(parts, relocs(parts))
     open(out, 'wb').write(data)
     print(f"wrote {out}: {len(data)} bytes ({-(-len(data) // 254)} blocks), parts "
           + ', '.join(f"${a:04X}-${a + len(d) - 1:04X}" for a, d in parts))

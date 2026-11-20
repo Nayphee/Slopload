@@ -167,6 +167,7 @@ def make(picture, o):
     d[28] = 1 | (2 if o.get('wait') else 0) | (4 if pic['colour'] is None else 0)   # (the fade: always)
     if o.get('drawin'):
         d[27] |= 0x40                               # (it draws in: the tools load it so)
+    d[27] |= 0x80                                   # (it can move a bank down: relocs())
     if spr:
         d[29:76] = spr['header']
     main = bytearray(d) + bytes(claim - LM_BASE - len(d))      # (its scratch: zeros)
@@ -181,9 +182,29 @@ def make(picture, o):
     return [(LM_BASE, bytes(main)), (0xe000, second)]
 
 
-def lm_bytes(parts):
-    """a .lm file (MODULES.md): each part's address, length and bytes"""
-    return b''.join(struct.pack('<HH', a, len(d)) + bytes(d) for a, d in parts)
+def relocs(parts):
+    """the relocations (lmreloc.py: (lists, bank bytes)) of a module that
+    make() made: the show module's own (assembled a bank lower and
+    compared), its colours' address (+76, a word) with colours, and +25,
+    the picture's VIC bank, one on a bank down; the bitmap's part has none"""
+    import lmreloc as LR
+    a, _ = module_at(LM_BASE)
+    b, _ = module_at(LM_BASE - LR.MOVE)
+    lists, probs = LR.find([(LM_BASE, a)], [(LM_BASE - LR.MOVE, b)])
+    if probs:
+        raise Bad("the show module doesn't move a bank down: " + "; ".join(probs))
+    main = parts[0][1]
+    at = main[76] | main[77] << 8
+    extra = [77] if LM_BASE < at < 0xcc00 else []
+    return [sorted(lists[0] + extra)] + [[] for _ in parts[1:]], [25]
+
+
+def lm_bytes(parts, rel=None):
+    """a .lm file (MODULES.md): each part's address, length and bytes, then
+    its relocations (lmreloc.py: rel, or relocs(parts) for one that make()
+    made)"""
+    import lmreloc as LR
+    return LR.join(parts, relocs(parts) if rel is None else rel)
 
 
 def main(argv):
@@ -217,7 +238,7 @@ def main(argv):
     except Bad as ex:
         print(f"picturelm: {ex}", file=sys.stderr)
         return 1
-    b = lm_bytes(parts)
+    b = lm_bytes(parts, relocs(parts))
     open(pos[1], 'wb').write(b)
     print(f"{pos[1]}: {len(b)} bytes; " + ', '.join(f"${a:04X}-${a + len(dd) - 1:04X}" for a, dd in parts))
     return 0

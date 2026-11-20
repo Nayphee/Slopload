@@ -21,7 +21,7 @@ Options (only the ones that differ from the defaults are needed):
   -module FILE|none  what runs while it loads: a module's .lm (the demos:
                      build/modules/flappy.lm, crossy.lm, squeeze.lm,
                      rubble.lm, bounce.lm, template.lm, ozgold.lm,
-                     petscii.lm), a module's .prg
+                     petscii.lm, hello.lm), a module's .prg
                      with its .parts.json beside it, a PETSCII screen
                      (.pet, .petmate or Marq's .c: shown while it loads),
                      a picture in one of picturelm.py's formats (Koala,
@@ -44,8 +44,12 @@ Options (only the ones that differ from the defaults are needed):
                      and -sprite go to it). The tune plays on through
                      both (-musicstart: from before the first, or
                      with the first or second); a PETSCII screen's counter, first, counts the
-                     second module's blocks down to 000. A PETSCII screen
-                     in a chain is built at $A000, clear of a picture
+                     second module's blocks down to 000. Where the two
+                     would share memory one moves a VIC bank down ($C000
+                     to $8000): the first if that clears them, else the
+                     second; two that both keep a screen at $BC00 (PETSCII
+                     screens, OZ GOLD) chain too: the second's loads aside
+                     and is copied in at the switch (LMFORMAT.md)
   -show MODE         module, none or music: what -module and -sid say
                      already (a module; the tune alone, the screen off;
                      nothing), so seldom needed
@@ -538,14 +542,15 @@ def ending_bits(o):
             | (8 if o.get('countdown') else 0))
 
 
-def find_game(spec, o=None, chain=False, parts=None):
+def find_game(spec, o=None, chain=False, parts=None, rel=None, moved=False):
     """the module, from its file: a .lm (all its parts in one file), a
     module's .prg (its parts file beside it), or a PETSCII screen (.pet,
     .petmate, .c: PETSCII-Load with that screen, and the options'
-    scroller and counter; chain: built at $A000, for a chain). Nothing
-    is looked up by name: the demo modules are files like any other
-    (build/modules/*.lm). parts: the module's parts, made here (a
-    picture: then_module)"""
+    scroller and counter). Nothing is looked up by name: the demo modules
+    are files like any other (build/modules/*.lm). parts: the module's
+    parts, made here (a picture: then_module), rel their relocations
+    (lmreloc.py); moved: they are a VIC bank down (move_game). Its 'parts'
+    and 'rel' are kept, for move_game"""
     if spec.lower() == 'none':
         return None
     import petscii as P
@@ -572,7 +577,8 @@ def find_game(spec, o=None, chain=False, parts=None):
             if o.get('font'):
                 scr = P.with_font(scr, o['font'])
             notes = []
-            parts = P.module(scr, **P.options({'-' + k: o.get(k) for k in pet}, scr), notes=notes, chain=chain)
+            parts = P.module(scr, **P.options({'-' + k: o.get(k) for k in pet}, scr), notes=notes)
+            rel = P.relocs(parts)
         except (P.Bad, ValueError) as ex:
             raise Fail(str(ex))
         for n in notes:
@@ -581,7 +587,7 @@ def find_game(spec, o=None, chain=False, parts=None):
         (addr, data), extra = parts[0], parts[1:]
     elif spec.lower().endswith('.lm'):
         try:
-            parts = P.read_lm(spec)
+            parts, rel = P.read_lm(spec, rel=True)
         except (P.Bad, OSError) as ex:
             raise Fail(str(getattr(ex, 'strerror', None) or ex))
         path = spec
@@ -591,7 +597,7 @@ def find_game(spec, o=None, chain=False, parts=None):
         if not os.path.isfile(path):
             raise Fail(f"no file {spec}: -module takes a module's file (a .lm; the demos are"
                        " build/modules/flappy.lm, crossy.lm, squeeze.lm, rubble.lm, bounce.lm, template.lm,"
-                       " ozgold.lm and petscii.lm),"
+                       " ozgold.lm, petscii.lm and hello.lm),"
                        " a PETSCII screen, or none")
         addr, data = load_prg(path)
         extra = None
@@ -603,7 +609,7 @@ def find_game(spec, o=None, chain=False, parts=None):
         raise Fail(f"{path}: not a SlopLoad module (its header is 32 bytes; this part is {len(data)})")
     w = lambda o: data[o] | data[o + 1] << 8
     # +10: end of the memory the game claims (its run-time buffers too)
-    claim = max(addr + len(data), w(10) or 0x10000 if len(data) > 11 else 0)
+    claim = max(addr + len(data), w(10) or (0xc000 if moved else 0x10000) if len(data) > 11 else 0)
     # +12: the game's worst edge-timing jitter in cycles (tests/jitter.py)
     jit = data[12] if len(data) > 12 and data[12] else GAME_JITTER_DEFAULT
     if jit > GAME_JITTER_MAX:
@@ -629,16 +635,133 @@ def find_game(spec, o=None, chain=False, parts=None):
                 if not os.path.exists(v['prg']):
                     raise Fail(f"{path}: its part '{k}' is missing: {v['prg']}")
                 g['extra'].append(load_prg(v['prg']))
+        r = spec.get('relocs')                  # (tools/build.py's: the main part's, then the low's)
+        if r and len(r['lists']) == 1 + len(g['extra']):
+            rel = (r['lists'], r['bank'])
     if extra:                           # (a .lm's or a screen's other parts)
         g['extra'] = [(a, bytes(d)) for a, d in extra]
     if path.lower().endswith(P.ENDINGS):
         g['label'] = f"PETSCII-Load with {os.path.basename(path)}"
     g['claims'] = [(addr, claim)] + [(a, a + len(d)) for a, d in g['extra']]
+    g['parts'] = [(addr, bytes(data))] + [(a, bytes(d)) for a, d in g['extra']]
+    g['rel'], g['moved'] = rel, moved
+    for i, c in enumerate(g['claims']):
+        for d in g['claims'][i + 1:]:
+            if overlap(c, d):
+                raise Fail(f"{path}: its parts share memory (${c[0]:04X}-${c[1] - 1:04X} and ${d[0]:04X}-${d[1] - 1:04X})"
+                           + (" a VIC bank down" if moved else ""))
     for clo, chi in g['claims']:
         for lo, hi, what in LOADER_RANGES:
             if overlap((clo, chi), (lo, hi)):
                 raise Fail(f"module ${clo:04X}-${chi - 1:04X} overlaps {what} (${lo:04X}-${hi - 1:04X})")
     return g
+
+
+def move_game(g):
+    """the module g a VIC bank down ($C000-$FFF9 to $8000-$BFF9: lmreloc.py),
+    for a chain whose two modules would share memory: read again from its
+    moved parts, or None if it can't move (it carries no relocations, or
+    its moved parts would land on one that stays)"""
+    import lmreloc as LR
+    if not LR.movable(g['parts'], g['rel']):
+        return None
+    try:
+        m = find_game(g['path'], {}, parts=LR.moved(g['parts'], g['rel']), rel=g['rel'], moved=True)
+    except Fail:
+        return None
+    # its claims: each from $C000 on $4000 lower, its end too ($FFFF or
+    # $10000, to the end: $C000), as SlopLoad 64 has them (c64model's
+    # moved_claims); a module whose header's claim (+10) moves with it
+    # (written mb+...) has the same in its moved header
+    m['claims'] = [(lo - LR.MOVE, 0xc000 if hi >= 0xffff else hi - LR.MOVE) if lo >= LR.FIXED else (lo, hi)
+                   for lo, hi in g['claims']]
+    m['claim'] = m['claims'][0][1]
+    if any(overlap(c, d) for i, c in enumerate(m['claims']) for d in m['claims'][i + 1:]):
+        return None
+    if 'label' in g:
+        m['label'] = g['label']
+    return m
+
+
+def chain_clash(a, b):
+    """the first two claims of the chain's modules a and b that overlap,
+    or None"""
+    return next(((ca, cb) for ca in a['claims'] for cb in b['claims'] if overlap(ca, cb)), None)
+
+
+def chain_stage(a, b):
+    """b after a, as they are placed: b as it is if they share no memory;
+    else, if only b's parts below $C000 (not its main part: a screen at
+    $BC00 for the C64's font, a font of its own) are in a's memory, b
+    with them staged (b['stage']: at, to, pages): the span of them, whole
+    pages from at, loads at the highest free page, to, while a shows, and
+    the switch copies it to its place once b is in (src/chain.asm), so a's
+    screen stays on show until then. b's claims are then its other parts',
+    the span's and its staging place's. None if they can't share the tape"""
+    import lmreloc as LR
+    if not chain_clash(a, b):
+        return b
+    stay = [c for c in b['claims'][1:] if c[0] < LR.FIXED]
+    rest = [b['claims'][0]] + [c for c in b['claims'][1:] if c[0] >= LR.FIXED]
+    if not stay or any(overlap(r, c) for r in rest for c in a['claims']):
+        return None
+    lo = min(c[0] for c in stay) & 0xff00
+    hi = (max(c[1] for c in stay) + 0xff) & 0xff00
+    n = hi - lo
+    busy = a['claims'] + rest + [(lo, hi), (0, 0x0800), (0xd000, 0xe000), (0xfffa, 0x10000)]
+    to = (0xfffa - n) & 0xff00
+    while to >= 0x0800 and any(overlap((to, to + n), c) for c in busy):
+        to -= 0x100
+    if to < 0x0800:
+        return None
+    m = dict(b)
+    m['stage'] = dict(at=lo, to=to, pages=n >> 8)
+    m['claims'] = rest + [(lo, hi), (to, to + n)]
+    return m
+
+
+def chain_fit(a, b):
+    """the chain's modules placed so that the second can load while the
+    first runs (SlopLoad 64's chfit, c64model's chain_fit): as they are,
+    else the first a VIC bank down, else the second; else, as they are or
+    with the first moved, the second's parts below $C000 staged
+    (chain_stage); else refused. (a, b, 'first', 'second' or None: the
+    one moved). The test hook SLOPLOAD_MOVE=first|second moves that one
+    whether it must or not"""
+    force = os.environ.get('SLOPLOAD_MOVE')
+    if force and force not in ('first', 'second'):
+        raise Fail(f"SLOPLOAD_MOVE={force}: first or second")
+    na, nb = (os.path.basename(g['path']) for g in (a, b))
+    tried, ways = [], []
+    for which in (None, 'first', 'second'):
+        if force and which != force:
+            continue
+        x, y = a, b
+        if which:
+            g = a if which == 'first' else b
+            m = move_game(g)
+            if m is None:
+                tried.append(f"{na if which == 'first' else nb} can't move (it carries no relocations: MODULES.md,"
+                             " \"A module that moves\")" if not g.get('rel') else
+                             f"{na if which == 'first' else nb} can't move (a bank down, its parts would share"
+                             " memory)")
+                continue
+            x, y = (m, b) if which == 'first' else (a, m)
+        if not chain_clash(x, y):
+            return x, y, which
+        if which != 'second':
+            ways.append((x, y, which))
+        if which:
+            h = chain_clash(x, y)
+            tried.append(f"{na if which == 'first' else nb} a VIC bank down still shares ${max(h[0][0], h[1][0]):04X}-"
+                         f"${min(h[0][1], h[1][1]) - 1:04X}")
+    for x, y, which in ways:                    # (last: the second's parts below $C000 staged)
+        z = chain_stage(x, y)
+        if z is not None:
+            return x, z, which
+    ca, cb = chain_clash(a, b) or ((0, 0), (0, 0))
+    raise Fail(f"-then: {na} (${ca[0]:04X}-${ca[1] - 1:04X}) and {nb} (${cb[0]:04X}-${cb[1] - 1:04X}) share memory,"
+               " and the second loads while the first runs; " + "; ".join(tried))
 
 
 def then_module(spec, o, screen):
@@ -660,18 +783,19 @@ def then_module(spec, o, screen):
         parts = PL.make(spec, {k: o.get(k) for k in PL.OPTS})
     except PL.Bad as ex:
         raise Fail(f"-then: {ex} (or a module: a .lm, a module's .prg, a PETSCII screen)")
-    g = find_game(spec, {}, parts=parts)
+    g = find_game(spec, {}, parts=parts, rel=PL.relocs(parts))
     g['label'] = f"{os.path.basename(spec)} ({PL.read_picture(spec)['name']}), as the picture module"
     return g, True
 
 
-CHAIN_AT = 0x0380              # the switch's code: src/chain.asm (the tape buffer)
+CHAIN_AT = 0x0378              # the switch's code: src/chain.asm (the tape buffer)
 
 
 def chain_shim(a, b, pstep, cs):
     """src/chain.asm assembled for the modules a (first) and b (second):
     dict(addr, data, cframe, cstop); pstep: the program's progress a page
-    (8.8), cs: the core's symbols (its vectors)"""
+    (8.8), cs: the core's symbols (its vectors); b's staged parts, if any
+    (chain_stage: the switch copies them to their place)"""
     import build as B
     import contextlib
     import io
@@ -679,11 +803,13 @@ def chain_shim(a, b, pstep, cs):
         org, data, labs = B.assemble(os.path.join(ROOT, 'src', 'chain.asm'), 'chain_placed',
                                      {'chainat': CHAIN_AT, 'a_frame': a['frame'], 'a_stop': a['stop'],
                                       'b_init': b['init'], 'b_frame': b['frame'], 'b_stop': b['stop'],
-                                      'pstep': pstep, 'pt_frame': cs['pt_frame'], 'pt_step': cs['pt_step']})
+                                      'pstep': pstep, 'pt_frame': cs['pt_frame'], 'pt_step': cs['pt_step'],
+                                      **({'stpages': b['stage']['pages'], 'stfrom': b['stage']['to'] >> 8,
+                                          'stto': b['stage']['at'] >> 8} if b.get('stage') else {})})
     assert org == CHAIN_AT and labs['chainend'] <= 0x0400, "src/chain.asm runs past the tape buffer"
     assert all(labs[v] & 255 != 255 for v in ('cafr', 'cast', 'cbin', 'cbfr', 'cbst')), \
         "src/chain.asm: a jmp () vector on a page's last byte"
-    return dict(addr=org, data=bytes(data), cframe=labs['cframe'], cstop=labs['cstop'])
+    return dict(addr=org, data=bytes(data), cframe=labs['cframe'], cstop=labs['cstop'], labs=labs)
 
 
 def number(opt, v):
@@ -755,15 +881,13 @@ def master(prg, tap, o, quiet=False):
                    f" shows {what[show]}")
     # ---- a chain (-then): the second module (chainb) shows after the first
     then = o.get('then')
-    chainb, pic_then, b_scr = None, False, False
+    chainb, pic_then, b_scr, chain_moved = None, False, False, None
     if then:
         if show != 'module':
             raise Fail("-then follows a first module: -module FILE -then FILE" if show == 'none' else
                        f"-then goes with -module (-show module); -show {show} shows {what[show]}")
         import petscii as P
         b_scr = then.lower().endswith(P.ENDINGS)
-        if b_scr and str(o['module']).lower().endswith(P.ENDINGS):
-            raise Fail("-module and -then: two PETSCII screens, both PETSCII-Load in the same memory")
         chainb, pic_then = then_module(then, o, b_scr)
     if o.get('wait') and show not in ('picture', 'picmusic', 'module'):
         raise Fail(f"-wait goes with a picture (-module PICTURE: its prompt shows on the picture)"
@@ -789,7 +913,7 @@ def master(prg, tap, o, quiet=False):
             parts = PL.make(o['module'], {'drawin': o.get('drawin')})
         except PL.Bad as ex:
             raise Fail(str(ex))
-        game = find_game(o['module'], {}, parts=parts)
+        game = find_game(o['module'], {}, parts=parts, rel=PL.relocs(parts))
         game['label'] = f"{os.path.basename(o['module'])} ({picture_file(o['module'])}), as the picture module"
     elif show == 'module':
         game = find_game(o['module'], {} if b_scr else o, chain=bool(then))
@@ -806,8 +930,8 @@ def master(prg, tap, o, quiet=False):
             if o.get(k) and not gflags & bit and not (pic_then and k == 'wait'):
                 raise Fail(f"{last.get('path', 'the module')}: it doesn't keep {what}: its header's byte 27,"
                            f" bit {bit.bit_length() - 1} (MODULES.md)" +
-                           ("; OZ GOLD counts blocks itself, a PETSCII screen with -counter ROW,COL"
-                            if k == 'countdown' else ""))
+                           ("; a PETSCII screen counts blocks with -counter ROW,COL (OZ GOLD's is"
+                            " in its .lm)" if k == 'countdown' else ""))
     if o.get('drawin'):                         # a picture drawn in: its maker's option (+27 bit 6)
         if show in ('picture', 'picmusic'):     # (the tool's own picture module: set once
             pass                                # it is placed, below)
@@ -831,16 +955,9 @@ def master(prg, tap, o, quiet=False):
                        " sprites show over it")
         spr = load_sprites(o['sprite'], o)
     if chainb:
-        na, nb = (os.path.basename(g['path']) for g in (game, chainb))
-        for ca in game['claims']:
-            for cb in chainb['claims']:
-                if overlap(ca, cb):
-                    raise Fail(f"-then: {na} (${ca[0]:04X}-${ca[1] - 1:04X}) and {nb} (${cb[0]:04X}-${cb[1] - 1:04X})"
-                               " share memory, and the second loads while the first runs. (A PETSCII screen"
-                               " made into a .lm for a chain: petscii.py -chain puts it at $A000, clear of a"
-                               " picture)")
         if not chainb['addr'] or len(chainb['data']) < 32:
-            raise Fail(f"{nb}: not a module")
+            raise Fail(f"{os.path.basename(chainb['path'])}: not a module")
+        game, chainb, chain_moved = chain_fit(game, chainb)
     # the screen is on (bad lines) while a game or a picture shows; music
     # alone keeps it off, and loads at screen-off speeds
     screen_on = game is not None and show != 'music'
@@ -987,7 +1104,7 @@ def master(prg, tap, o, quiet=False):
                    (0x2f9, 0x300, "the loader's exit ($02F9-$02FF: stage 1's last bytes, run at the end)"),
                    (0xfffa, 0x10000, "the CPU's vectors")]
         if o.get('then'):                           # (the switch runs every frame, the tune playing)
-            busy_ws.append((CHAIN_AT, 0x400, "the chain's switch ($0380-$03FF, with -then)"))
+            busy_ws.append((CHAIN_AT, 0x400, f"the chain's switch (${CHAIN_AT:04X}-$03FF, with -then)"))
         for i, (lo, hi) in enumerate(mus['claims']):
             for llo, lhi, what in (busy if i == 0 else busy_ws):
                 if overlap((lo, hi), (llo, lhi)):
@@ -1204,7 +1321,9 @@ def master(prg, tap, o, quiet=False):
         if not live_blocks:
             raise Fail(f"-then: all of the program loads into {os.path.basename(chainb['path'])}'s memory, after"
                        " it: it would show for no time at all")
-        bparts = [(a, bytes(d)) for a, d in chainb.get('extra', [])] + [(chainb['addr'], bytes(chainb['data']))]
+        st = chainb.get('stage')            # (its parts below $C000 staged: loaded where the switch
+        bparts = [((st['to'] + a - st['at']) if st and a < 0xc000 else a, bytes(d))     # copies them from)
+                  for a, d in chainb.get('extra', [])] + [(chainb['addr'], bytes(chainb['data']))]
         nchain = sum(len(d) for _, d in bparts)
         game['data'][26] = min(255, -(-(nchain + 2) // 254))
         # the first's progress: full ($ff, a counter's 000) two pages before
@@ -1538,7 +1657,12 @@ def master(prg, tap, o, quiet=False):
                                                                                   if chainb else ()):
                 print(f"  {which} {g.get('label') or os.path.basename(g['path'])} ${g['addr']:04X}-${g['end'] - 1:04X}"
                       f" ({len(g['data'])} bytes), claims "
-                      + ', '.join(f"${a:04X}-${b - 1:04X}" for a, b in g.get('claims', [(g['addr'], g['claim'])])))
+                      + ', '.join(f"${a:04X}-${b - 1:04X}" for a, b in g.get('claims', [(g['addr'], g['claim'])]))
+                      + (f"; moved a VIC bank down (from ${g['addr'] + 0x4000:04X}), clear of the "
+                         + ('second' if g is game else 'first') if g.get('moved') else "")
+                      + (f"; its parts below $C000 (${g['stage']['at']:04X}-${g['stage']['at'] + 256 * g['stage']['pages'] - 1:04X})"
+                         f" load at ${g['stage']['to']:04X} while the first shows, and take their place at the switch"
+                         if g.get('stage') else ""))
             if chainb:
                 print(f"  the second module's {game['data'][26]} blocks load while the first runs (a counter on the"
                       f" first counts them down to 000), then it shows; the switch ${shim['addr']:04X}-"

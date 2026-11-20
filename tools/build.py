@@ -24,6 +24,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 sys.path.insert(0, HERE)
 import asm6502  # noqa: E402
+import lmreloc as lr  # noqa: E402
 
 BUILD = os.path.join(ROOT, 'build')
 INC = re.compile(r'^\s+incasm\s+"([^"]+)"', re.I)
@@ -286,7 +287,7 @@ def build_core(name, measure, subst=None, edits=(), blocks=()):
     print(f"{name:7s} ${o:04X}-${end - 1:04X}  {len(d):4d} bytes  (exit stub {stub} bytes)")
 
 
-CHAIN_PETSCII = 0xa000          # PETSCII-Load's main part in a chain (slopload.py -then)
+PETSCII_LOWER = 0xa000          # PETSCII-Load a VIC bank lower (its relocations: petbase)
 
 
 def build_modules():
@@ -332,18 +333,46 @@ def build_modules():
             print(f"     {g + ' low':8s} ${low[0]:04X}-${low[0] + len(low[1]) - 1:04X}  {len(low[1]):4d} bytes")
             spec['low'] = {'prg': lp, 'always': True}
             lm += struct.pack('<HH', low[0], len(low[1])) + bytes(low[1])
+        # a bank lower (lmreloc.py): assembled again with its bank's base
+        # ($8000, not $c000) and compared, the bytes that differ its
+        # relocations (each a high byte, $40 apart); written after its parts,
+        # and its header's +27 bit 7 set. A part below $c000 (a ROM-font
+        # screen at $bc00) stays, assembled lower only to keep the order
+        if g != 'show':
+            text = open(src).read()
+            lower = ({'petbase': PETSCII_LOWER, 'lowat': PETSCII_LOWER - 0x400} if g == 'petscii'
+                     else {'mb': 0x8000, **({'lowat': 0x9c00} if re.search(r'(?m)^lowat\s*=', text) else {})}
+                     if re.search(r'(?m)^mb\s*=', text) else None)
+            if lower is None:
+                print(f"  {g}: no 'mb =' (its bank's base): it can't be moved for a chain (MODULES.md)")
+            else:
+                o2, d2, lab2 = assemble(src, f'module_{g}_lower', lower)
+                if 'lowpart' in lab2:
+                    lo2, hi2, top2 = lab2['lowpart'], lab2['lowend'], lab2['mainpart']
+                    b_parts = [(top2, d2[top2 - o2:]), (lo2, d2[lo2 - o2:hi2 - o2])]
+                    if low[0] < lr.FIXED:               # (a part that stays: built lower only for order)
+                        b_parts[1] = (low[0], b_parts[1][1])
+                else:
+                    b_parts = [(o2, d2)]
+                a_parts = [(o, bytes(d))] + ([(low[0], bytes(low[1]))] if low else [])
+                lists, probs = lr.find(a_parts, b_parts)
+                if probs:
+                    raise SystemExit(f"{g}: it doesn't move a bank down as it should: " + "; ".join(probs)
+                                     + " (every address in its bank written as mb+...: MODULES.md)")
+                rel = (lists, [])
+                d = bytearray(d)
+                d[27] |= lr.FLAG                        # (it carries its relocations)
+                d = bytes(d)
+                a_parts[0] = (o, d)
+                if not lr.claim_moves(a_parts, rel):
+                    raise SystemExit(f"{g}: its header's claim (+10) doesn't move with it: write it mb+..."
+                                     " (MODULES.md)")
+                open(os.path.join(BUILD, 'modules', g + '.prg'), 'wb').write(asm6502.to_prg(o, d))
+                lm = lr.join(a_parts, rel)
+                spec['relocs'] = {'lists': lists, 'bank': []}
+                print(f"     {'(moves)':8s} {sum(len(x) for x in lists)} relocations, a bank down"
+                      f" ${a_parts[0][0] - lr.MOVE:04X}")
         open(os.path.join(BUILD, 'modules', g + '.lm'), 'wb').write(lm)
-        if g == 'petscii':              # (and at $a000 for a chain, clear of a picture: petscii.py)
-            o2, d2, lab2 = assemble(src, 'module_petscii_chain', {'petbase': CHAIN_PETSCII,
-                                                                   'lowat': CHAIN_PETSCII - 0x400})
-            top = lab2['mainpart']
-            if bytes(d2[:lab2['lowend'] - o2]) != bytes(low[1]):
-                raise SystemExit("petscii: the chain's build has another screen part")
-            if lab2['modend'] > 0xb000:
-                raise SystemExit("petscii: the chain's build runs into a font's room at $B000")
-            open(os.path.join(BUILD, 'modules', 'petscii_chain.prg'), 'wb').write(
-                asm6502.to_prg(top, d2[top - o2:]))
-            print(f"     {'(chain)':8s} ${top:04X}-${lab2['modend'] - 1:04X}  {lab2['modend'] - top:4d} bytes")
         if g == 'show':                 # (the tools build it in: no .lm)
             cs = json.load(open(os.path.join(BUILD, 'core.sym.json')))
             bad = [k for k in ('pt_frame', 'pt_stop', 'pt_step') if lab[k] != cs[k]]
@@ -366,6 +395,53 @@ def build_modules():
                     mods = os.path.join(BUILD, 'modules')
                     v['prg'] = os.path.relpath(p, mods if p.startswith(mods + os.sep) else ROOT)
             json.dump(spec, open(os.path.join(BUILD, 'modules', g + '.parts.json'), 'w'), indent=1)
+    build_screens(gdir)
+
+
+def build_screens(gdir):
+    """a module that is a PETSCII screen: modules/NAME/NAME.pet (and no
+    NAME.asm) is made PETSCII-Load with that screen, as tools/petscii.py
+    makes one, with the options in NAME.opt if there is one (petscii.py's:
+    -counter ROW,COL, -scroll TEXT ...). OZ GOLD is one. Written as the
+    assembled modules are: NAME.lm, and NAME.prg with its other parts and
+    their parts file; its labels are PETSCII-Load's (module_NAME.sym.json,
+    for the tests)"""
+    import shlex
+    import shutil
+    import petscii as P
+    mods = os.path.join(BUILD, 'modules')
+    for g in sorted(os.listdir(gdir)):
+        pet = os.path.join(gdir, g, g + '.pet')
+        if not os.path.exists(pet) or os.path.exists(os.path.join(gdir, g, g + '.asm')):
+            continue
+        optf = os.path.join(gdir, g, g + '.opt')
+        opt, rest = P.parse(shlex.split(open(optf).read()) if os.path.exists(optf) else [])
+        if rest:
+            raise SystemExit(f"{optf}: {' '.join(rest)}: not an option of tools/petscii.py")
+        try:
+            scr, parts = P.made(pet, opt)
+            rel = P.relocs(parts)
+        except (P.Bad, ValueError) as ex:
+            raise SystemExit(f"{pet}: {ex}")
+        (ma, md), others = parts[0], parts[1:]
+        open(os.path.join(mods, g + '.lm'), 'wb').write(P.lm_bytes(parts, rel))
+        open(os.path.join(mods, g + '.prg'), 'wb').write(asm6502.to_prg(ma, md))
+        spec = {}
+        for k, (a, d) in enumerate(others):         # (its screen, a font of its own)
+            name = g + ('_low' if k == len(others) - 1 else f'_part{k + 1}') + '.prg'
+            open(os.path.join(mods, name), 'wb').write(asm6502.to_prg(a, d))
+            spec['low' if k == len(others) - 1 else f'part{k + 1}'] = {'prg': name, 'always': True}
+        spec['relocs'] = {'lists': rel[0], 'bank': rel[1]}
+        json.dump(spec, open(os.path.join(mods, g + '.parts.json'), 'w'), indent=1)
+        shutil.copy(os.path.join(BUILD, 'module_petscii.sym.json'), os.path.join(BUILD, f'module_{g}.sym.json'))
+        for stale in (f'module_{g}_lower.sym.json', f'module_{g}.expanded.asm', f'module_{g}_lower.expanded.asm'):
+            if os.path.exists(os.path.join(BUILD, stale)):
+                os.remove(os.path.join(BUILD, stale))
+        print(f"module {g:8s} ${ma:04X}-${ma + len(md) - 1:04X}  {len(md):4d} bytes: PETSCII-Load with {g}.pet"
+              + (f" ({open(optf).read().strip()})" if os.path.exists(optf) else ""))
+        for a, d in others:
+            print(f"     {'':8s} ${a:04X}-${a + len(d) - 1:04X}  {len(d):4d} bytes")
+        print(f"     {'(moves)':8s} {sum(len(x) for x in rel[0])} relocations, a bank down ${ma - lr.MOVE:04X}")
 
 
 if __name__ == '__main__':

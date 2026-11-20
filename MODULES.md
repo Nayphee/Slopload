@@ -7,7 +7,8 @@ Crossy game = **Crossy-Load**), and any module that keeps this standard
 drops in beside them. This file is the standard: what a module may and
 may not do while the tape loads, the header that describes it, the
 shared kit every module uses, the files it is made of, and the tests it
-passes.
+passes. `LMFORMAT.md` describes the module's file, the `.lm`, byte by
+byte; `LMGUIDE.md` writes a small module by hand, line by line.
 
 Start from `modules/template/`: a small game that already does
 everything below. Flappy-Load (`modules/flappy/`), Crossy-Load
@@ -22,12 +23,13 @@ cp -r modules/template modules/mymodule
 mv modules/mymodule/template.asm modules/mymodule/mymodule.asm
 python3 tools/build.py
 python3 tests/mktest.py build/test_small.prg 0x2000
-python3 tools/slopload.py build/test_small.prg mymodule.tap -module mymodule
+python3 tools/slopload.py build/test_small.prg mymodule.tap -module build/modules/mymodule.lm
 python3 tests/loadtest.py mymodule.tap
 ```
 
 `tools/build.py` builds every module in `modules/`, this one to
-`build/modules/mymodule.prg`. `mktest.py` makes a small test program
+`build/modules/mymodule.lm` (the file the tools take: the module's
+parts and its relocations). `mktest.py` makes a small test program
 that checks itself once loaded, `slopload.py` puts it on a tape with
 your module, and `loadtest.py` loads the tape in VICE and passes when
 the program's own check does. To play it,
@@ -96,9 +98,23 @@ share you declare). So:
 | your zero page | $10-$8F ($70-$7F: the music player's, if you play music) |
 | debug hooks | $8E `dbg_space`, $8F `dbg_auto` (below): the same in every module |
 | scratch | $0200-$0258, the BASIC input buffer: nothing reads it before the program starts. It isn't loaded or claimed, so set it up in `init` |
-| your module | VIC bank 3 ($C000-$FFF9), not $D000-$DFFF (I/O) |
+| your module | VIC bank 3 ($C000-$FFF9), not $D000-$DFFF (I/O); a bank lower ($8000-$BFF9) when a chain moves it (below) |
 | a tune in SlopLoad's own player | $C000 on, when one is chosen and your module makes effects (`g_sfx`, below): keep $C000-$CAE9 free for it |
 | a SID tune | placed by the tool clear of your memory (its zero page: $70-$7F at most) |
+
+**Write every address of your module from one name, `mb`**, its VIC
+bank's start (`mb = $c000` at the top of the source, then `scra =
+mb+$2400`, `*=mb+$2000`, `g_claim = mb+$3c00`), and choose the VIC's
+bank with the kit's `gk_bank`, never a number in `$DD00`. `tools/build.py`
+builds the module a second time with `mb = $8000` and lists the bytes
+that differ: its relocations, which let the tools move it a bank down
+when a chain needs the room ("Two modules on one tape", below). An
+address written as a number stops the build if it shows as a difference
+of the wrong kind, and is caught by `tests/movecheck.py` if it doesn't
+show at all. A module with no `mb` still builds and runs, but can't be
+moved. What the VIC shows must also keep out of the bank's $1000-$1FFF
+(in bank 3 the I/O, where you can't write anyway): moved to bank 2, the
+VIC sees the C64's character ROM there.
 
 Your module is one stretch from its load address (the header) to
 `g_claim`, plus, if it needs one, a second part below it: put it first
@@ -115,10 +131,11 @@ loads while your module runs.
 
 ## The header: `src/modhead.asm`
 
-Set seven values and include it at the load address:
+Set these values and include it at the load address:
 
 ```
-g_claim = $fc00                 ; end of your memory (variables too)
+mb = $c000                      ; your VIC bank (above)
+g_claim = mb+$3c00              ; end of your memory (variables too)
 g_jitter = 48                   ; measured: tests/jitter.py
 g_share = 35                    ; the most of the CPU the loader may take
 g_border = 1                    ; it leaves the border to the loader (gk_bord)
@@ -127,7 +144,7 @@ g_wait = 1                      ; it keeps -wait: once loaded it stays, until SP
 g_count = 1                     ; its status line counts blocks with -countdown (the kit's)
 g_end = 1                       ; it keeps -waitgame: once loaded it stays, until a game ends (gk_done)
 ...
-*=$e000
+*=mb+$2000
         incasm "modhead.asm"
 ```
 
@@ -139,7 +156,7 @@ It writes the 32-byte header. Byte by byte:
 | +4 | `init` (word) | your label |
 | +6 | `frame` (word) | your label |
 | +8 | `stop` (word) | your label |
-| +10 | the end of your memory, run-time buffers included (word) | `g_claim` |
+| +10 | the end of your memory, run-time buffers included (word; from `mb`, so that it moves with the module: the build checks) | `g_claim` |
 | +12 | your worst edge timing jitter, in cycles: 64 at most | `g_jitter` |
 | +13 | the song to play, $FF for none | the tool |
 | +14 | the most of the CPU (%) the loader may take; 0 means 35 | `g_share` |
@@ -151,7 +168,7 @@ It writes the 32-byte header. Byte by byte:
 | +24 | the music: 1 SlopLoad's own player at $C000 (voice 3 is yours for effects; given only to a module with `g_sfx`, and to the show module), 2 any other tune, or the player where it can't go at $C000 (all three voices) | the tool |
 | +25 | (the show module's VIC bank) | the tool |
 | +26 | the program's disk blocks (254 bytes; 250 at most) that load while the module runs: all of them, unless part of the program loads into the module's memory after it | the tool |
-| +27 | bit 0: the module leaves the border alone while `ld_state` bit 5 is set (`-showstripes` needs it); bit 1: it makes sound effects on voice 3 when the music lets it (+24 = 1); bit 2: it keeps `-wait` (+28 bit 1); bit 3: its status line counts blocks with `-countdown` (+28 bit 3); bit 4: second in a chain, it plays on the tune the first started (+28 bit 4); bit 5: a game that keeps `-waitgame` (+28 bit 5); bit 6 (the show module's): a picture made to draw in (its maker's option: `picturelm.py -drawin`, PICTURE-LM's line 9; +28 bit 6 when the tools do) | `g_border`, `g_sfx`, `g_wait`, `g_count`, `g_end`; bit 4 the kit's (`gk_chain`) |
+| +27 | bit 0: the module leaves the border alone while `ld_state` bit 5 is set (`-showstripes` needs it); bit 1: it makes sound effects on voice 3 when the music lets it (+24 = 1); bit 2: it keeps `-wait` (+28 bit 1); bit 3: its status line counts blocks with `-countdown` (+28 bit 3); bit 4: second in a chain, it plays on the tune the first started (+28 bit 4); bit 5: a game that keeps `-waitgame` (+28 bit 5); bit 6 (the show module's): a picture made to draw in (its maker's option: `picturelm.py -drawin`, PICTURE-LM's line 9; +28 bit 6 when the tools do); bit 7: it carries its relocations, so the tools may move it a VIC bank down (`LMFORMAT.md`) | `g_border`, `g_sfx`, `g_wait`, `g_count`, `g_end`; bit 4 the kit's (`gk_chain`); bit 7 `tools/build.py`'s |
 | +28 | the tool's options: bit 1 `-wait` (SPACE), bit 5 `-waitgame` (a game's end; never both), bit 3 `-countdown`, bit 4 a chain's tune already playing (the show module's own: bit 0 the fade, which the tools now always set, bit 2 a hires picture, bit 6 the picture draws in: its screen, bank+$0C00-$0FE7 (to $0FFF with sprites, whose pointers are in it), and bitmap, bank+$2000-$3F3F, load after its init, which clears them first) | the tool |
 | +29 | to +31: spare (the show module's run on) | |
 
@@ -170,7 +187,8 @@ The core calls each with `jsr`, interrupts on and decimal mode off. A,
 X and Y are yours; leave the stack as you found it.
 
 - **`init`**: once, with the screen off. Set up your screens and
-  colours (VIC bank 3: `$DD00` bits 0-1 = 0), call `gk_musinit`,
+  colours (your VIC bank: `jsr gk_bank`, which finds it from where the
+  module is, bank 3 or, moved, bank 2), call `gk_musinit`,
   `sidinit` and `musicgo`, draw everything, and leave the screen off
   (`$D011` = `$0B`): your frame turns it on.
 - **`frame`**: called in a loop, one frame each. It waits for the raster
@@ -207,9 +225,9 @@ X and Y are yours; leave the stack as you found it.
   loading into the module's memory (the core's autorun, `ld_state` bit
   1) it comes as soon as the program is in, with no `frame` seeing bit 7
   first: a module that shows
-  the load's end (a counter at 000) draws it here. OZ GOLD and
-  PETSCII-Load call their own `frame` twice more when the counter isn't
-  at 000 yet, the music off: the second shows a whole frame of 000.
+  the load's end (a counter at 000) draws it here. PETSCII-Load calls
+  its own `frame` twice more when the counter isn't at 000 yet, the
+  music off: the second shows a whole frame of 000.
 
 ## The frame's time
 
@@ -320,11 +338,24 @@ your own can borrow its method.
 
 `slopload.py -module A -then B` runs A while B's parts load, then B
 while the program loads (a PETSCII screen with a counter, then a
-picture). Nothing changes for either module, with two exceptions:
+picture). Any module can be A or B. Nothing changes for either, with
+these exceptions:
 
 - **Memory.** B's parts load while A runs, so A and B can't share any
-  memory, and neither can the tune. The program's bytes in A's memory
-  load once B runs.
+  memory, and neither can the tune. Most modules are in VIC bank 3, so
+  the tools move one of them a bank down, to $8000-$BFF9: A if that
+  clears them, else B. Two that both keep a screen at $BC00 for the
+  C64's font (PETSCII screens: OZ GOLD is one) chain too: A moves, and
+  B's screen (its parts below $C000) loads aside while A shows and is
+  copied into
+  place at the switch, so A's screen stays whole until B takes over
+  (`LMFORMAT.md`, "A second's screen, staged"). A module that can be
+  moved carries the list of its own addresses in its `.lm`, and
+  `tools/build.py` finds them for you, as long as you write every
+  address of your module's from one name, `mb`, and choose your VIC bank
+  with `gk_bank` ("Memory", above; `LMFORMAT.md`, "A module that
+  moves"). Nothing in your code needs to know whether it was moved or
+  staged. The program's bytes in A's memory load once B runs.
 - **The music first.** With a tune, the tools' default (`-musicstart
   before`; SlopLoad 64's line 5: 1) has the tune start before any module
   loads: SlopLoad's own show module plays it, the screen off, while the
@@ -343,20 +374,23 @@ picture). Nothing changes for either module, with two exceptions:
   module with music code of its own does the same and sets +27 bit 4,
   or it starts the tune again.
 
-The switch is the loader's (`src/chain.asm`, 112 bytes, which the tool
-assembles and loads to $0380, in the tape buffer; SlopLoad 64 fills in a
-copy's 12 bytes of addresses). B's last block carries the block flag
-`f_chain` ($04). At the first frame after it, the switch:
+The switch is the loader's (`src/chain.asm`, 136 bytes, which the tool
+assembles and loads to $0378, in the tape buffer; SlopLoad 64 fills in a
+copy's 12 bytes of addresses and the three of a staged screen). B's
+last block carries the block flag `f_chain` ($04). At the first frame
+after it, the switch:
 
 1. moves the core's frame vector to B's frame and starts the progress
    again for the program;
 2. waits for the vertical blank, turns the screen off and puts back the
    sprites, `$D016` and the scroll as the KERNAL leaves them;
-3. calls B's `init`, as the core would after a boot: the screen off.
+3. copies B's staged screen into place, if it has one (above);
+4. calls B's `init`, as the core would after a boot: the screen off.
 
 SlopLoad 64 chains the same way (its line 4 asks for B after A), reading
 B's parts from B's file again as it writes the tape, so the two needn't
-fit in its memory together.
+fit in its memory together, and moving A or B as `slopload.py` does
+(it says which under line 4).
 
 A's `stop` is never called. While A runs, `ld_progress` is B's parts'
 progress, full (`$FF`) two pages before B is in, and A's +26 is B's
@@ -389,6 +423,7 @@ are the behaviour every module has, written once:
 | `status` | the status line (once a frame): with `-countdown` the blocks still to load in place of the percent |
 | `random` | 16-bit LFSR, A = a new byte |
 | `gk_bord` | the border = A, unless it is the loader's (`ld_state` bit 5); keeps A, X and Y |
+| `gk_bank` | (`modinit.asm`) the VIC in your module's bank: from its own address, bank 3 as built, bank 2 when a chain moved it ($DD00's bank bits, and `$DD02` set for them) |
 
 It needs from you, by these names:
 
@@ -411,14 +446,13 @@ It needs from you, by these names:
   in its low part), and its scratch `fsh`, `fkn`, `fsv` (25, 25 and 34
   bytes, untouched while the module still runs once the program is in):
   `incasm "fadescr.asm"` makes them bytes; a loading screen can point
-  them at memory free by then (OZ GOLD and PETSCII-Load: their colours'
-  bytes). The kit sets `fstep` (8: about 2.6 seconds).
+  them at memory free by then (PETSCII-Load: its colours' bytes). The kit sets `fstep` (8: about 2.6 seconds).
 
 ## What every module does
 
 A game does all of this. A loading screen keeps the sound, debug hooks
 and screens; it shows its own progress and ends by itself once the
-program is in (OZ GOLD, below).
+program is in (PETSCII-Load, below).
 
 - **The status line** (one text row, top or bottom): LOADING, a 20-cell
   bar and the percent while it loads; TAPE ERROR, flashing, after a
@@ -434,8 +468,8 @@ program is in (OZ GOLD, below).
   mid-round too), and the program starts: the kit's `startkey`, called
   once a tick. Every module's music fades out first (about 2.6 seconds,
   the kit's `gk_exit` and `fadekit.asm`; a game plays on meanwhile);
-  with no music, at once. A loading screen ends by itself (OZ GOLD and
-  PETSCII-Load show 000 while their music fades).
+  with no music, at once. A loading screen ends by itself (PETSCII-Load
+  shows 000 while its music fades).
   Only if whoever masters the tape asks for it does the module stay
   (SlopLoad 64 asks with the module: "once the program is in, it starts:
   1 at once, 2 when space is pressed, 3 when the game ends", offering
@@ -443,16 +477,16 @@ program is in (OZ GOLD, below).
   - with the tool's `-wait` (header +28 bit 1; `g_wait = 1` says it
     can), until SPACE alone (`startkey`): a game plays on, game after
     game (`gk_done` doesn't end it), LOADED! PRESS SPACE TO START THE
-    GAME on the status line; a loading screen holds at its end (OZ GOLD
-    and PETSCII-Load: 000 on the counter, the music on), then as without
+    GAME on the status line; a loading screen holds at its end
+    (PETSCII-Load: 000 on the counter, the music on), then as without
     it (the fade);
   - with the tool's `-waitgame` (header +28 bit 5; `g_end = 1` says it
     can: games only), until the game ends: the player plays on to game
     over (`gk_done`, called there), and SPACE does nothing.
   Whether and how a module tells the player to press SPACE is its own
   choice: the kit's status line says LOADED! PRESS SPACE TO START THE
-  GAME, OZ GOLD writes PRESS SPACE on its tape error row, and PETSCII-Load
-  leaves it to the screen's author (the screen or its scroller).
+  GAME, and PETSCII-Load leaves it to the screen's author (the screen
+  or its scroller).
   Until then the module goes on, also with the tape stopped: players stop
   the tape just to play (as with Invade-a-Load).
 - **The border:** every write to `$D020` through `gk_bord`, so that
@@ -466,8 +500,8 @@ program is in (OZ GOLD, below).
   (`music/player.asm`, marked "SLP1" after its jump table: the demo
   tunes are) and the tool could put it at $C000, where it leaves voice
   3 alone. Any other tune has every voice. A module that makes effects
-  says so in its header (`g_sfx = 1`); one that doesn't (OZ GOLD,
-  PETSCII-Load) gets every tune with all three voices.
+  says so in its header (`g_sfx = 1`); one that doesn't (PETSCII-Load)
+  gets every tune with all three voices.
 - **Debug hooks** for the tests: `dbg_space` ($8E) non-zero acts as a
   SPACE press once loaded; `dbg_auto` ($8F) non-zero plays by itself
   (your `autopilot`), and stops trying once the program has loaded, so
@@ -490,8 +524,8 @@ writes, in `build/modules/`:
 | `<name>.parts.json` | the second part, if the module has one: loaded with it (always) |
 | `<name>.lm` | the whole module in one file: what the tools take (`-module build/modules/<name>.lm`) |
 
-A module brings no music of its own unless it is built in (OZ GOLD's):
-the tune is a file of its own, chosen when the tape is made (`-sid`).
+A module brings no music of its own: the tune is a file of its own,
+chosen when the tape is made (`-sid`).
 A path in a parts file is looked for beside the parts file first, then
 in the SlopLoad folder, so the three files can be handed to someone
 else as they are. They master with the module's path in place of a name:
@@ -499,6 +533,12 @@ else as they are. They master with the module's path in place of a name:
 ```bash
 python3 tools/slopload.py program.prg program.tap -module path/to/mymodule.prg
 ```
+
+A module needn't be built here at all. Any assembler's program will do,
+CBM prg Studio's or one made on a C64: `tools/prglm.py` on a PC, or
+PRG-LM on a C64, writes its `.lm`, relocations and all (`LMGUIDE.md`,
+"With any assembler, or on a C64 alone", which also prints the least
+module there can be).
 
 ### On the C64: the `.lm` file
 
@@ -519,9 +559,11 @@ The file is each part of the module, one after another:
 | that many | its bytes |
 
 The main part (the one starting with the header) comes first, then the
-second part if there is one. A `.lm` is not a program to LOAD: SlopLoad
-64 reads it into its own memory (12 KB at most, the parts together) and
-writes the parts onto the tape. It checks what the PC tool does: the
+second part if there is one, then the module's relocations (a block at
+address $0000: `LMFORMAT.md` has every byte). A `.lm` is not a program to LOAD: SlopLoad
+64 reads it into its own memory (the parts within 12,282 bytes, four of
+them at most; a file longer than that, its relocations past the end,
+still loads, but can't be moved) and writes the parts onto the tape. It checks what the PC tool does: the
 header's "PLG1", a jitter of 64 or less, and nothing in the loader's
 memory. Beside a SID tune, the module must also leave the tune room: SlopLoad
 64 refuses a tune that uses the module's zero page ($10-$6F and $80-$8F),
@@ -529,6 +571,9 @@ plays other than once a frame, takes more than 3,700 cycles a call, or
 sits in the module's memory.
 
 ## Tests your module passes
+
+The tests are in the project's `tests/` folder (a release has only
+`tests/mktest.py` of them).
 
 1. The load cases: add your module to `tests/suite.py` (copy the
    `small-crossy*`, `big-crossy-s0` and `sid-crossy-*` lines with your
@@ -556,7 +601,15 @@ sits in the module's memory.
 6. If it makes sound effects (`g_sfx = 1`), `tests/sfxcheck.py --module
    NAME` (and `--ntsc`): beside a demo tune the effects get voice 3 and
    the tune never touches it; with any other tune, `--expect music`.
-7. `tests/waitcheck.py --module NAME --wait --countdown` (and without
+7. `tests/movecheck.py build/modules/NAME.lm` and `--second` (and
+   `--ntsc`, `--c128`): moved a VIC bank down, first and second in a
+   chain, with a stick that wanders, nothing of the module's own is read
+   or written in bank 3, its frame runs every frame with the VIC in bank
+   2, and the program loads. If the module keeps a screen below $C000
+   (the C64's font, as PETSCII-Load), `tests/stagecheck.py --then
+   build/modules/NAME.lm` too: second after a PETSCII screen, its
+   screen waits aside and is in place at its init.
+8. `tests/waitcheck.py --module NAME --wait --countdown` (and without
    them, `--ntsc`, `--machine x128`): with `-countdown` the number after
    the bar is the blocks still to load at every look, without it the
    percent; without `-wait` the module ends within a few ticks of the
@@ -581,48 +634,73 @@ sits in the module's memory.
 - the tests above passed on PAL, NTSC and a C128;
 - its `.lm` file mastered by SlopLoad 64 (`tests/c64tool.py --module
   path/to/mymodule.lm`) as well as by the PC tool;
+- moved a bank down, first and second in a chain, with nothing of its
+  own left in bank 3 (`tests/movecheck.py path/to/mymodule.lm` and
+  `--second`);
 - played to the end on a real C64 from a cassette, if you can.
 
-## Not only games: OZ GOLD
+## Not only games: PETSCII-Load, and OZ GOLD
 
-A module needn't be a game. `modules/ozgold/` is OZ GOLD, a loading
-screen in the style of U.S. Gold's Novaload one, on the same standard
-(`-module build/modules/ozgold.lm`, or `ozgold.lm` in SlopLoad 64). It shows some things a
-module can do beyond playing:
+A module needn't be a game. `modules/petscii/` is PETSCII-Load, a
+loading screen: any PETSCII screen, written into a module with fixed
+places for it (the codes in its second part at $BC00; the border,
+background, `$D018` and colours from byte 32 of its main part), so a
+tool can put a screen in without assembling anything. `tools/petscii.py`
+does it on a PC (and the PC tool takes a `.pet`, `.petmate` or `.c` as
+`-module`), PETSCII-LM on a C64. It shows some things a module can do
+beyond playing:
 
-- **Its own status.** No LOADING bar: BLOCKS TO LOAD counts the program
-  down from header byte 26 (the tool's: the blocks that load while it
-  shows) and `ld_progress`, and TAPE ERROR flashes on a blank row. The
-  kit's `status` isn't called.
-- **Its own music, built in.** `mkdata.py` moves `music/build/ozgold.sid`
-  to $E900 with `tools/sidreloc.py` (checked as SlopLoad 64 checks a tune
-  beside a module) and writes it as source. In `init`, if the tool chose
-  no tune (byte 13 $FF), it points `minit`/`mplay` at its own; a `-sid`
-  tune still replaces it.
+- **Its own status.** No LOADING bar: a counter of three digits, where
+  the screen's author wants it, counts the program down from header
+  byte 26 (the tool's: the blocks that load while it shows) and
+  `ld_progress`. A tape error turns the border red (pink, on a red
+  border). The kit's `status` isn't called.
 - **The ROM font, in another VIC bank.** A module can't switch the
   character ROM in (`$01` is the loader's), but the VIC sees the ROM font
-  in banks 0 and 2 by itself. OZ GOLD's screen is a second part at $BC00
-  (bank 2, `$D018` = $F4: the screen at $3C00, the font at $1000), so
-  its design is ordinary PETSCII, made by `mkscreen.py`.
-- **Once the program is in, 000 and a fade**, as Novaload did: BLOCKS
-  TO LOAD stays at 000 while the music fades out (the kit's
+  in banks 0 and 2 by itself. PETSCII-Load's screen is a second part at
+  $BC00 (bank 2, `$D018` = $F4: the screen at $3C00, the font at
+  $1000), so a design is ordinary PETSCII. That part has an address of
+  its own (`lowat`), not one from `mb`: it stays at $BC00 when the rest
+  moves, and the module always shows bank 2. Second in a chain after
+  another screen at $BC00, the tools load it aside and the switch copies
+  it in (above).
+- **Once the program is in, 000 and a fade**, as Novaload did: the
+  counter stays at 000 while the music fades out (the kit's
   `fadekit.asm`, below), then the program starts. Nobody is playing, so
   nothing waits for a key, unless the tool's `-wait` asks: then it holds
-  at 000, the music on, with PRESS SPACE on the tape error's row, and
-  fades once SPACE is pressed (PETSCII-Load holds the same way, with no
-  prompt of its own: put one in your screen or its scroller). Its own tune sets `$D418` at its init only,
-  so `init` sets `fdirect` and the fade writes the volume itself; a
-  `-sid` tune is faded as PETSCII-Load fades one.
+  at 000, the music on, and fades once SPACE is pressed. It has no
+  prompt of its own: put one in your screen or its scroller.
+- **A message scrolling across a row** (below), and Novaload's
+  screech in place of music (README.md), if the screen's author asks.
 
-`tests/ozgoldcheck.py` checks it at every frame of a load.
+Either tool writes the module's relocations with it (the template's
+own, as `tools/build.py` found them), so a PETSCII screen is first or
+second in a chain like any module: its main part moves to $A000, its
+screen and font stay.
 
-`modules/petscii/` (PETSCII-Load) is the same idea made general: any
-PETSCII screen, written into a module with fixed places for it (the
-codes in its second part at $BC00; the border, background, `$D018` and
-colours from byte 32 of its main part), so a tool can put a screen in
-without assembling anything. `tools/petscii.py` does it on a PC (and the
-PC tool takes a `.pet`, `.petmate` or `.c` as `-module`), PETSCII-LM on a
-C64. It can also scroll a message across a row and count blocks down.
+**OZ GOLD** (`modules/ozgold/`) is such a screen: a loading screen in
+the style of U.S. Gold's Novaload one, the Australian flag and OZ GOLD
+in the C64's own characters, with the counter in its BLOCKS TO LOAD
+box. Its source is `ozgold.pet` (drawn by `mkscreen.py`) and
+`ozgold.opt`, which holds `tools/petscii.py`'s options for it
+(`-counter 24,24`). `tools/build.py` makes `build/modules/ozgold.lm` from
+the two, and PETSCII-LM makes the same file, byte for byte, from
+`ozgold.pet` on SlopLoad 64's disk (its line 6: row 24, column 24). Its
+medley is a tune like any other, chosen when the tape is made:
+`music/build/ozgold.sid`, `ozgold.slm` on the disk. (To 0.18.0 OZ GOLD
+was a module of its own code, with the medley built in and TAPE ERROR
+and PRESS SPACE written on a row of its screen.)
+
+**A screen as a module in the build.** Any `modules/NAME/NAME.pet`
+with no `NAME.asm` beside it is built this way, with the options in
+`NAME.opt` if there is one (a line of `tools/petscii.py`'s: `-counter
+ROW,COL`, `-scroll "TEXT"`, `-scrollrow N`, `-screech` ...): the build
+writes `build/modules/NAME.lm` (and `NAME.prg` with its parts file, as
+for an assembled module).
+
+`tests/petsciicheck.py` checks a PETSCII screen's module at every tick
+of a load (`--module build/modules/ozgold.lm` for OZ GOLD).
+
 A screen in a font of its own gets a third part: the tool keeps only
 the characters the module shows, numbered again from 0, at $B800 (128
 or fewer: right under the screen, `$D018` $FE) or $B000 ($FC), still in
@@ -644,7 +722,7 @@ goes before the split for a row low on the screen and after it for one
 near the top, wherever the frame has the most time; and with a scroller
 the module asks the loader for less of the CPU (35%).
 
-Once the program is in, PETSCII-Load (and OZ GOLD) holds the screen
+Once the program is in, PETSCII-Load holds the screen
 (000 on the counter, the scroller still going) and fades the music out
 before it asks to stop, as U.S. Gold's Novaload did; the code is the
 kit's `src/fadekit.asm`, which every module includes (a game's fade is
@@ -679,7 +757,7 @@ rest of the program is in, so there is no fade (the counter still shows
 follows it to the module's stop: 000 held, the volume ($D418 as VICE
 keeps it) falling 15 to 0 in 16 steps of 8 ticks, the music still
 playing, `$01` as the loader has it each tick, and the RAM under the SID
-unchanged; `tests/ozgoldcheck.py` does the same for OZ GOLD. With
+unchanged. With
 `--cutoff` (that case) both check the stop's two frames instead: the second a frame
 after the first, 000 drawn by then, the screen on and the SID silent.
 
@@ -691,5 +769,5 @@ after the first, 000 drawn by then, the screen on and the SID silent.
 | play field | scrolls left 2 px a tick, double-buffered | rows 5-20 (eight lanes), scrolls up smoothly, double-buffered; lanes redrawn while the beam is away | rows 2-22, columns 4-35 (a shaft, 256 pixels); girders fall smoothly with no scrolling: six characters redrawn in the vertical blank, one screen | rows 2-22, a town of 16 blocks in columns 4-35 on a street (row 23); nothing scrolls: the charge's two characters, a blast's four and a new town's rows drawn in the vertical blank, one screen | rows 2-23, columns 4-35 in a frame; a wall of 16 bricks by 8 rows (rows 4-11); nothing scrolls: the soft sprites' cells, bricks and rows written in the vertical blank, one screen |
 | player | a bird in 9 characters (soft sprite) | a hen in 9 characters | a rocket, one multicolour sprite | a plane, one multicolour sprite (8 lines: one character row) | a bat (12 multicolour pixels by 5 lines) and a ball (3 by 6), soft sprites in up to 8 characters, two sets taking turns |
 | characters | 128, ASCII text codes | 128, packed text codes | 128, ASCII text codes; multicolour girders and rock | 128, ASCII text codes; multicolour blocks (three styles), street, charge and blasts | 128, ASCII text codes; multicolour bricks (plain, tough, cracked) and frame; 107-127 hold the wall and the soft sprites' cells at run time |
-| memory | $E000-$FBFF, and the fade at $CD90-$CFF7 (a second part) | $C8E0-$CFFB (the fade in it) and $E000-$FFF9 (two parts), and $0200-$0255 (a buffer, two tables, five variables) | $E000-$F82C | $E000-$F954 | $E000-$FBCB, the fade at $CDA0-$CFF3 (a second part), a map of the field at $FC28-$FFBF (run time: claimed, not on the tape), and $0200-$0253 (two rows' colours) |
+| memory (as built: `mb` = $C000) | $E000-$FBFF, and the fade at $CD90-$CFF7 (a second part) | $C8E0-$CFFB (the fade in it) and $E000-$FFD5 (two parts), and $0200-$0255 (a buffer, two tables, five variables) | $E000-$F83D | $E000-$F965 | $E000-$FBDC, the fade at $CDA0-$CFF3 (a second part), a map of the field at $FC28-$FFBF (run time: claimed, not on the tape), and $0200-$0253 (two rows' colours) |
 | round ends | the bird crashes | the hen dies (traffic, river, swept away, train) | the rocket touches a girder | the plane flies into a block | the last of three balls is lost |

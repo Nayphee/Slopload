@@ -20,7 +20,7 @@ Many programs on one cassette: see [Tape sides](#tape-sides-many-programs-on-a-c
 
 ## Quick start
 
-From a release (`slopload-0.17.0.zip`, or the latest: unpack it anywhere) everything is
+From a release (`slopload-0.19.1.zip`, or the latest: unpack it anywhere) everything is
 built already: go straight to mastering. You need Python 3.8 or later;
 MP3 output also needs GStreamer (`gst-launch-1.0`). The C64 side is on
 `build/slopload64.d64` and `.d81`. What's new in each release:
@@ -128,13 +128,15 @@ tune given with
 style of U.S. Gold's Novaload one, for Australians. The Australian flag
 in PETSCII (the C64's own character set), OZ GOLD in U.S. Gold's own
 block letters, ALL AUSTRALIAN SOFTWARE on green and gold, and BLOCKS TO
-LOAD counting down to 000 as the program comes in. It plays its own
-medley (Advance Australia Fair, Waltzing Matilda and Bound for Botany
-Bay; `-sid` plays your tune instead, S turns it off). Once the program
-is in, BLOCKS TO LOAD stays at 000 while the music fades out, about 2.6
-seconds, as Novaload's did, and then the program starts (with `-wait`,
-not before SPACE). It's an example of a module that does something
-other than play a game (MODULES.md).
+LOAD counting down to 000 as the program comes in. It is a PETSCII
+screen (`modules/ozgold/ozgold.pet`) in PETSCII-Load, with the counter
+in its box: what `tools/petscii.py` and PETSCII-LM make of that file
+with the counter at row 24, column 24. Its medley (Advance Australia
+Fair, Waltzing Matilda and Bound for Botany Bay) is a tune like any
+other: add `-sid music/build/ozgold.sid` (S turns it off). Once the
+program is in, BLOCKS TO LOAD stays at 000 while the music fades out,
+about 2.6 seconds, as Novaload's did, and then the program starts (with
+`-wait`, not before SPACE). A tape error turns its border red.
 
 **A PETSCII screen of your own** shows the same way: give the file as
 the module.
@@ -252,7 +254,7 @@ part that falls in the module's memory) loads after it.
 | `-fade` | | kept for old command lines: every module's music fades out at the end now (below) |
 | `-drawin` | | with a picture as the first module: it starts first, its bitmap cleared, and draws in as its colours, screen and bitmap load (about 5-8 seconds more at speed 0; below) |
 | `-sprite FILE` | | with a picture: one or two loading sprites over it; `-spritepos X,Y`, `-spritecolours C,C,...`, `-spritespeed N`, `-spritemc A,B`, `-spriteexpand` (below) |
-| `-module FILE\|none` | `none` | what shows while it loads, a file: a `.lm` (the demos: `build/modules/flappy.lm`, `crossy.lm`, `squeeze.lm`, `rubble.lm`, `bounce.lm`, `template.lm`, `ozgold.lm`, `petscii.lm`; your own: MODULES.md), a module's `.prg` with its `.parts.json` beside it, a PETSCII screen (`.petmate`, `.pet`, Marq's `.c`), or a picture (Koala, Art Studio, Doodle or any of PICTURE-LM's 16 formats: below), each made into its module there and then; `none`: no module |
+| `-module FILE\|none` | `none` | what shows while it loads, a file: a `.lm` (the demos: `build/modules/flappy.lm`, `crossy.lm`, `squeeze.lm`, `rubble.lm`, `bounce.lm`, `template.lm`, `ozgold.lm`, `petscii.lm`, `hello.lm`; your own: MODULES.md, LMGUIDE.md), a module's `.prg` with its `.parts.json` beside it, a PETSCII screen (`.petmate`, `.pet`, Marq's `.c`), or a picture (Koala, Art Studio, Doodle or any of PICTURE-LM's 16 formats: below), each made into its module there and then; `none`: no module |
 | `-speed N` | 0 | -12 (the most margin) to 13: slushload's speed scale, and below it (below) |
 | `-bootspeed N` | as `-speed` | the same for the parts loaded with the screen off |
 | `-scroll TEXT` | | with a PETSCII screen: a scrolling message; `-scrollrow N` (default 24), `-scrollspeed N` (1-4, default 2), `-scrollcolours HEX` (its row's colours, a hex digit a column from column 1, repeated; default: the screen's) |
@@ -378,12 +380,10 @@ Tape Master Kits played on until a key, `-wait` makes it stay: a game
 goes on, round after round, with LOADED! PRESS SPACE TO START THE GAME
 on the status line, until SPACE (a game over starts a new game);
 `-waitgame` waits for the end of the game instead: the player plays on
-to game over, and the program starts then (not with `-wait`). OZ GOLD
-and a
-PETSCII screen hold at 000, the music on (OZ GOLD with PRESS SPACE on
-its tape error row; put a prompt of your own in a PETSCII screen or its
-scroller), and fade once SPACE is pressed; a game fades its tune too
-before the program starts.
+to game over, and the program starts then (not with `-wait`). A
+PETSCII screen (OZ GOLD is one) holds at 000, the music on (put a
+prompt of your own in the screen or its scroller), and fades once SPACE
+is pressed; a game fades its tune too before the program starts.
 `-countdown` makes a game's status line count the blocks still to load
 down to 000 ("024", as those kits' games did) where it showed the
 percent. A module says in its header whether it keeps each (all the
@@ -446,8 +446,8 @@ python3 tools/slopload.py prog.prg prog.tap -module title.pet -scroll "LOADING T
   which the tool makes into the picture module there and then: `-wait`,
   `-fade` and `-sprite` (with its options) go to it.
 - **The switch** is the loader's own: the second module's last block
-  carries a flag, and at the next frame a small piece of code (112 bytes,
-  in the tape buffer at $0380) blanks the screen in the vertical blank
+  carries a flag, and at the next frame a small piece of code (136 bytes,
+  in the tape buffer at $0378) blanks the screen in the vertical blank
   and starts the second module: the first screen, a blank frame or two,
   then the second.
 - **The tune** (`-sid`) starts before the first module loads
@@ -458,9 +458,16 @@ python3 tools/slopload.py prog.prg prog.tap -module title.pet -scroll "LOADING T
   again (its header's byte 27, bit 4, says it won't; the report says
   when it will). Rebuilding it with the kit is enough.
 - **Memory:** the second module's parts load while the first runs, so the
-  two can't share any. In a chain the tool builds a PETSCII screen at
-  $A000, not $E000, clear of a picture's $C000-$FFBF (`petscii.py
-  -chain` makes such a `.lm`). The program's bytes in the first module's
+  two can't share any. Any module can be first or second: most live in
+  VIC bank 3 ($C000-$FFF9), so where the two would overlap the tool moves
+  one of them a bank down, to $8000-$BFF9: the first if that clears them,
+  else the second (the report says `moved a VIC bank down`). Every module
+  carries the list of its own addresses for that ([LMFORMAT.md](LMFORMAT.md),
+  "A module that moves"). Two that both keep a screen at $BC00 for the
+  C64's own font (OZ GOLD, PETSCII screens) chain as well: the second's
+  screen loads aside while the first shows (the report says `load at
+  $FB00`) and the switch copies it into place, so the first screen
+  stays whole until the second takes over. The program's bytes in the first module's
   memory load once the second has taken over; only those in the second's
   (and the tune's) load after it, with the screen off.
 - **The cost:** the second module's parts load with the screen on, at the
@@ -468,7 +475,7 @@ python3 tools/slopload.py prog.prg prog.tap -module title.pet -scroll "LOADING T
   about 20 seconds at speed 0 under a PETSCII screen with a scroller.
 
 SlopLoad 64 chains two modules too (line 4: [below](#modules-music-and-pictures)),
-and PETSCII-LM writes a screen at $A000 for one (its line 8).
+and moves or stages them the same way.
 
 ### Speeds
 
@@ -972,13 +979,19 @@ can go on a tape.
   TAP writer, PETSCII-LM, SID-SLM, PICTURE-LM and PETSCII-ED, and the demo files:
   the modules (`FLAPPY-LOAD.LM`, `CROSSY-LOAD.LM`, `SQUEEZE-LOAD.LM`,
   `RUBBLE-LOAD.LM`, `BOUNCE-LOAD.LM`, `OZGOLD.LM`, `PETSCII.LM`), two
-  PETSCII screens (`DEMO.PET`, and `SERIAL.PET`: a mock of Novaload's
-  boot screen), a Koala picture (`SLOPLOAD.KOA`: SLOPLOAD in rainbow
+  PETSCII screens (`DEMO.PET`, `SERIAL.PET`: a mock of Novaload's
+  boot screen, and `OZGOLD.PET`: OZ GOLD's screen, which PETSCII-LM
+  makes into `OZGOLD.LM` with a counter at row 24, column 24), a Koala picture (`SLOPLOAD.KOA`: SLOPLOAD in rainbow
   letters) and a loading sprite (`CASSETTE.SPR`) for PICTURE-LM, and
   three tunes, ready
   (`SLOPLOAD.SLM`, `ENIGMA.SLM`, `OZGOLD.SLM`: OZ GOLD's medley, for
   any show) and as `.sid` files for SID-SLM (`SLOPLOAD.SID`,
   `ENIGMA.SID`, `OZGOLD.SID`).
+- The B side, `build/slopload64-b.d64`, a second 1541 disk (the .d81
+  has both sides on it): NOTES, these instructions to read on the C64
+  itself, and what a module's writer needs: PRG-LM, the demo module
+  `HELLO-LOAD.LM`, and its source and the least module's as text files
+  for an assembler (`HELLO.S`, `LEAST.S`). Below: NOTES, and PRG-LM.
 - The program to master, on any disk in any drive (8 to 30). One file,
   as for the PC tool: $0801-$FFF9.
 - If you want them, on any disk: a module (a `.lm` file), a SID
@@ -1002,7 +1015,7 @@ LOAD"SLOPLOAD64",8
 RUN
 ```
 
-SlopLoad 64 shows its menu: `*** SLOPLOAD 0.17.0 ***` (the release) at the top, the machine
+SlopLoad 64 shows its menu: `*** SLOPLOAD 0.19.1 ***` (the release) at the top, the machine
 it found under it in grey (`C64 PAL`; `SUPERCPU NTSC, 15616 KB SUPERRAM`;
 `C128 PAL (2 MHZ), 512 KB REU` ...), then lines 1-9, one setting
 each, and a module's options on the next row when they don't fit on its
@@ -1104,10 +1117,12 @@ before only needs renaming): a module written to the standard in
 [MODULES.md](MODULES.md), built by `tools/build.py` (which writes
 `build/modules/NAME.lm`) and copied onto any disk. The ones on SlopLoad
 64's disk are demos (`flappy-load.lm`, `crossy-load.lm`, `squeeze-load.lm`, `rubble-load.lm`, `bounce-load.lm`, `ozgold.lm`,
-the OZ GOLD loading screen with its own music, and `petscii.lm`, a
-PETSCII screen); a module of your own goes beside them, or on a disk of
-its own. A `.lm` is the module alone, with no music (but OZ GOLD's,
-part of OZ GOLD): choose a tune (5) to play beside it, as on a PC
+the OZ GOLD loading screen (a PETSCII screen: choose `ozgold.slm` on
+line 5 for its medley), and `petscii.lm`, another
+PETSCII screen; the B side has `hello-load.lm` too, LMGUIDE.md's
+balloon); a module of your own goes beside them, or on a disk of
+its own (one you assembled yourself, on the C64 or anywhere: PRG-LM, below, makes its
+`.lm`). A `.lm` is the module alone, with no music: choose a tune (5) to play beside it, as on a PC
 (`-module flappy.lm -sid enigma.sid`). A **PETSCII screen** of your own becomes one with PETSCII-LM
 (below) or `tools/petscii.py` on a PC. SlopLoad 64 checks the file is a module, that it keeps
 out of the loader's memory and that its timing jitter is within what the
@@ -1126,9 +1141,20 @@ way (with no first on line 3 it says so). The first shows while the
 second's parts load, then the second while the program loads, the tune
 playing on through both (as on a PC: [above](#two-modules-one-after-the-other--then)).
 The typical pair is a PETSCII screen with a scroller and counter, written by
-PETSCII-LM with its line 8 at 2 (at $A000: first in a chain), then a picture's module
-from PICTURE-LM. The wait and count questions are then the second's. The two
-mustn't share memory (SlopLoad 64 says so if they do). The second
+PETSCII-LM, then a picture's module from PICTURE-LM. The wait and count
+questions are then the second's. Where the two would share memory, one
+moves a VIC bank down, as on a PC: the first if that clears them, else the
+second, and line 4 says which (`THE FIRST GOES A VIC BANK LOWER`, or `IT
+GOES ...` for the second). Two that both keep a screen at $BC00 (a
+PETSCII screen, OZ GOLD) chain too: the second's screen waits aside
+while the first shows (`ITS SCREEN WAITS AT $FB00 TILL THE SWITCH`) and
+takes its place when the second starts. Two that can't be parted are
+refused (`THE TWO MODULES SHARE MEMORY`). A module file longer than SlopLoad 64's
+12,282 bytes of room (a picture from PICTURE-LM with its list of
+relocations) is read to there: its parts must fit, and it doesn't move.
+The other module does, if its own list is 512 bytes or less: every demo
+module's but Crossy-Load's (610), which can't follow a picture on a C64
+(on a PC it can). The second
 needn't fit in memory beside the first: only its header and where its
 parts go are kept, and its bytes are read from its file again as the
 tape is written, as the program's are, so leave its disk in the drive.
@@ -1243,7 +1269,7 @@ line 8.)
 | `CHOOSE A PROGRAM FIRST (1)` | RETURN with no program on line 1 |
 | `IT'S EMPTY` | the file has nothing in it |
 | `ITS JITTER IS OVER 64: THE LOADER CAN'T ...` / `IT NEEDS THE LOADER'S MEMORY` | a module the loader can't run beside |
-| `THE TWO MODULES SHARE MEMORY ...` | a chain's two modules overlap: one of them must be made for a chain (PETSCII-LM's line 8) |
+| `THE TWO MODULES SHARE MEMORY ...` | a chain's two modules overlap, even with one of them a VIC bank lower and the second's screen loaded aside: two pictures (neither moves on SlopLoad 64), or a module made with SlopLoad 0.17.0 or before (no relocations: make it again) |
 | `THE PROGRAM LOADS WHERE THE MODULES ARE: THE SECOND WOULD SHOW FOR NO TIME` | a chain with a program that covers both modules' memory |
 | `TOO MANY BLOCKS` / `TOO MANY PULSE SETS ON ONE TAPE` | more than the tool's tables hold (40 blocks; the pulse sets' tables) |
 | `$033C WAS OVERWRITTEN: LOAD AGAIN` | the tool's tables in the tape buffer were changed (a cartridge or a freezer): load SlopLoad 64 again |
@@ -1318,8 +1344,8 @@ LOAD"PETSCII-LM",8
 RUN
 ```
 
-PETSCII-LM shows a menu, as SlopLoad 64 does: `*** PETSCII-LM 0.17.0
-***` (the release) at the top, then lines 1-9, one setting each. Press a
+PETSCII-LM shows a menu, as SlopLoad 64 does: `*** PETSCII-LM 0.19.1
+***` (the release) at the top, then lines 1-8, one setting each. Press a
 line's number to change it, as often as you like and in any order: the
 screen clears and its name appears in a light blue bar at the top, with
 its questions below (a choice as numbers: 1, 2), and the menu comes back
@@ -1342,8 +1368,7 @@ away.
 | 5 | colours | **the message's colours: 1 as on the screen, 2 edit them** (below) |
 | 6 | counter | **a block counter: its row** (RETURN: none), then **its column** (the first of its three digits). Not on the message's rows (its own, the one above and the one below). |
 | 7 | font | **the drive with the font** and **its file name**: a font of your own, a `.64c` file as Petmate imports one (a load address, then up to 2,048 bytes, 8 a character). With a screen read, a key shows it in the font, as `S` does. RETURN alone at the name keeps the font there is; `-` goes back to the C64's own. The menu shows the font's file, or `THE C64'S OWN`. A Petmate screen drawn in an imported font exports to a `.pet` that says upper case: give it its font here. |
-| 8 | chain | **where it goes: 1 at $E000 (on its own), 2 at $A000: first in a chain**. 2: the module is written at $A000, not $E000, clear of a picture module's $C000-$FFBF, so a picture can be the second in a chain after it (SlopLoad 64's line 4, the PC tool's `-then`). The menu shows `FIRST IN A CHAIN: AT $A000` or `NO: AT $E000`. The same file as `tools/petscii.py -chain`. |
-| 9 | sound | **the sound while it loads: 1 the music, if the tape has a tune, 2 Novaload's screech** [1]. 2: each byte of the program, as it loads, is the pitch of a sawtooth on voice 1, as Novaload's loader made it (`tools/petscii.py -screech`). With the counter (line 6), it makes a Novaload-style loading screen. The screech has the SID: start the tune with a second module (SlopLoad 64's music line, 3) or it is cut off when the screen starts. The menu shows `NOVALOAD'S SCREECH` or `THE MUSIC (IF ANY)`. |
+| 8 | sound | **the sound while it loads: 1 the music, if the tape has a tune, 2 Novaload's screech** [1]. 2: each byte of the program, as it loads, is the pitch of a sawtooth on voice 1, as Novaload's loader made it (`tools/petscii.py -screech`). With the counter (line 6), it makes a Novaload-style loading screen. The screech has the SID: start the tune with a second module (SlopLoad 64's music line, 3) or it is cut off when the screen starts. The menu shows `NOVALOAD'S SCREECH` or `THE MUSIC (IF ANY)`. |
 
 Lines 3-5 are grey while there is no message.
 
@@ -1386,7 +1411,7 @@ LOAD"PETSCII-ED",8
 RUN
 ```
 
-Its menu, as the other tools': `*** PETSCII-ED 0.17.0 ***` at the top,
+Its menu, as the other tools': `*** PETSCII-ED 0.19.1 ***` at the top,
 lines 1-5, then the keys, and the editor's keys under them.
 
 | line | | |
@@ -1607,6 +1632,56 @@ AGAIN`). The Last Ninja's songs each use 14-18 of its 139 pages; song 11
 cuts to 3,491 bytes, and the others, cut again as init leaves them, to
 2,943-3,808 bytes, all but song 4 (as on the PC).
 
+### PRG-LM: a module from an assembler's programs
+
+A module you wrote and assembled yourself, with any assembler, is a
+program (a `.prg`); SlopLoad 64 wants a `.lm`. PRG-LM writes one: `LOAD
+"PRG-LM",8` and `RUN` (it is on the B side; [LMGUIDE.md](LMGUIDE.md)
+prints its listing as well, 105 lines of BASIC). It asks for the program, then for the same program
+assembled a VIC bank lower (0: none), for up to three more parts the
+same way, and for the module's drive and name; each file can be on a
+drive of its own, and `$` at a file's name lists the disk. With the
+build a bank lower it finds the module's relocations, so the module can
+move for a chain; without, the module loads and runs as it is. It
+writes the same file as `tools/prglm.py` on a PC (`python3
+tools/prglm.py my.lm my.prg -lower my8.prg`), and as `tools/build.py`
+for the demo modules. It is BASIC, and slow: about four minutes for
+Hello-Load's 2.6 KB on a 1541. LMGUIDE.md, "With any assembler, or on a
+C64 alone", has the whole way from an assembler to a tape with no PC,
+step by step for Turbo Macro Pro (tried with v1.2 in VICE). The B
+side's `LEAST.S` and `HELLO.S` are the guide's two modules already
+spelt for Turbo Macro Pro, as text files its editor reads in (back
+arrow, then E).
+
+### NOTES: the instructions, on the disk
+
+The B side carries what you are reading, for a C64 with no PC beside
+it: `LOAD"NOTES",8` and `RUN`. NOTES lists its chapters with a number
+each, about fifty of them over three pages:
+
+- this part of the manual, a chapter for SlopLoad 64's every section
+  and each of the tools, and "Tape errors";
+- LMGUIDE.md, a loader module written by hand, a chapter for each step;
+- LMFORMAT.md, the `.lm` file byte by byte.
+
+Type a chapter's number and RETURN to read it; `+` and `-` turn the
+list's pages, `Q` leaves. A chapter shows 23 lines at a time: any key
+for the next page, the back arrow (or RUN/STOP) for the list. RETURN
+alone at the list reads the chapter in the brackets, which is the next
+one after the last you finished, so RETURN reads it all straight
+through. Headings are white, listings and what you type light blue.
+
+The chapters are text files (`NOTES.01` on, and the list,
+`NOTES.IDX`): any program that reads a SEQ file can show them, in the
+lower and upper case set. `tools/c64docs.py` makes them from the
+documents each time the disks are built, so they say what the documents
+say: lines of 39 columns, a table's row as its first cell with the
+others under it, a listing's comment on the line after its instruction.
+What they leave out is PRG-LM's own listing (the program is on the same
+disk: `LIST` it) and the rest of this manual, which is the PC tool's.
+NOTES looks for them on the drive it was loaded from, and asks for the
+drive if they aren't there.
+
 ## Writing a module
 
 **Size.** The tool takes any module that stays out of the loader's memory
@@ -1627,6 +1702,16 @@ cuts to 3,491 bytes, and the others, cut again as init leaves them, to
 
 Zero page $10-$8F is the module's ($70-$7F if it uses the music).
 
+**A first module, by hand: [LMGUIDE.md](LMGUIDE.md)** writes Hello-Load
+(`modules/hello/`, `-module build/modules/hello.lm`), a hot-air balloon
+over a bitmap, every line of its assembly explained: the header and the
+loader's calls, text, a sprite, a sound effect and bitmap graphics.
+**[LMFORMAT.md](LMFORMAT.md)** is the `.lm` file, byte by byte.
+A module needs nothing of SlopLoad's to be assembled: the guide's last
+part takes one from any assembler (CBM prg Studio, or one on a C64) to
+its `.lm` with `tools/prglm.py` or PRG-LM, and prints the least module
+there can be, 87 bytes, to start from.
+
 Every module follows one standard, written down in
 **[MODULES.md](MODULES.md)**, so a tape works the same whichever module it
 carries and your own module drops in beside Flappy-Load and Crossy-Load:
@@ -1636,9 +1721,10 @@ to start, fire on port 2, S for the music, the debug hooks the tests
 use). A module supplies its own screens (a game its play and characters
 too), and `init`, `frame` and `stop`. Start from `modules/template/` (Template-Load, a
 minimal game that already keeps the standard: `-module build/modules/template.lm`).
-OZ GOLD (`modules/ozgold/`) and PETSCII-Load (`modules/petscii/`) keep the
-same standard without being games: loading screens, one with a counter
-and its own music, the other any PETSCII screen.
+PETSCII-Load (`modules/petscii/`) keeps the same standard without
+being a game: a loading screen for any PETSCII screen, with a counter
+and a scrolling message if you want them. OZ GOLD (`modules/ozgold/`) is
+one such screen, a `.pet` file the build makes into a module.
 
 Two header bytes tell the tool what the module can stand:
 
@@ -1651,11 +1737,13 @@ Two header bytes tell the tool what the module can stand:
 
 And the tool tells the module, besides the tune's fields and its own
 options (byte 28: `-wait`, `-waitgame`, `-countdown`), **byte 26**, the
-program's size in disk blocks (OZ GOLD counts it down).
+program's size in disk blocks (a PETSCII screen's counter counts it down).
 
 Put the module in `modules/<name>/<name>.asm`; `tools/build.py` builds every
 module it finds there, running `modules/<name>/mkdata.py` first if there is
-one. A module brings no music unless it is built in (OZ GOLD's): the tune is the tape's (`-sid`, or SlopLoad 64's line 5).
+one. A module that is a PETSCII screen needs no code: put `<name>.pet`
+there (and `<name>.opt`, a line of `tools/petscii.py`'s options) and the
+build makes it PETSCII-Load with that screen. A module brings no music: the tune is the tape's (`-sid`, or SlopLoad 64's line 5).
 
 **A second part.** A module too big for one stretch of memory can have a
 second part below its first: put it first in the source between the
@@ -1703,16 +1791,18 @@ that choose what is tested.
 | `tests/petfont.py OUT.64c` / `OUT.petmate [many]` | PETSCII-Load's test font (256 different characters) and screens drawn in it, as the suites use them |
 | `tests/petsciicheck.py [--module FILE] [--font F.64c] [--ntsc] [--c128 [--fast]] [--tap T] [--music N\|none] [--sid F] [--scroll TEXT --scrollrow N --scrollspeed N --scrollcolours HEX] [--counter R,C] [--screech] [--shots DIR] [--cutoff]` | PETSCII-Load at every tick of a load (a `.pet`, `.petmate`, `.c` or `.lm`): VIC bank 2 and the case's `$D018` (or a font's, with its cut-down font in memory), border (red on a tape error, pink where it is red already) and background, screen and colours as the file has them (the message's row's as given, staying put), one tick a frame (5 in 6 on NTSC), the music; the scroller's split, every `$D016` write's line and value (inside the empty rows), its row always the message's next window, and the counter's digits; once loaded, to the module's stop: 000 held, the music still playing with `$D418`'s volume falling 15 to 0 in 16 steps of 8 ticks, `$01` as the loader has it, the RAM under the SID unchanged; then the program's PASS (`--cutoff`: mastered with `-nomotor` and a program reaching into the module's memory, so the loader cuts it off: its stop's two frames, as ozgoldcheck's) |
 | `tests/screechcheck.py [--screen FILE] [--prg PRG] [--ntsc] [--c128] [--sid TUNE]` | PETSCII-Load's screech (`-screech`): its init sets voice 1 as Novaload's ($D400 $F0, $D405 0, $D406 $F0, $D418 $0F, $D404 $21); while the program loads, each store to $D401 the byte the loader stored last (read where the core's store points) and one for nearly every byte (99% measured); the gate off once the program is in, and it starts. `--sid`: the tune cut off as the screen starts, its play routine never called again, the screech as before. `petsciicheck.py --screech` checks the scroller's split with it |
-| `tests/petsciilm.py [--machine x128] [--ntsc]` | PETSCII-LM on the C64, its menu worked in one session: .pet files made into modules (a default name, a typed one, replace yes and no, the screen it shows checked, RETURN alone keeping it, a message with a counter, the message editor's keys (typing in, cursor keys, DEL after a quote mark, INST, HOME, CLR: the message checked each time, and the menu's line for it), the rows it lists that need nothing cleared against the file, a row whose neighbours it says it will clear, then clears on writing (as the PC tool does) and puts back, lines that need a message or a screen, a counter refused on the message's rows when asked and when written, the message's row's colours edited (colour keys, cursor limits, HOME, F, P; the editor's row, bar and arrow checked), following the row, and back to the screen's, S's preview, two files refused), a font of its own (read and shown in it, written with a message and a counter, a screen of all 256 characters, `-` back to the C64's own, a file too short, one read before a screen), each .lm the same as `tools/petscii.py`'s |
+| `tests/petsciilm.py [--machine x128] [--ntsc]` | PETSCII-LM on the C64, its menu worked in one session: .pet files made into modules (a default name, a typed one, replace yes and no, the screen it shows checked, RETURN alone keeping it, a message with a counter, the message editor's keys (typing in, cursor keys, DEL after a quote mark, INST, HOME, CLR: the message checked each time, and the menu's line for it), the rows it lists that need nothing cleared against the file, a row whose neighbours it says it will clear, then clears on writing (as the PC tool does) and puts back, lines that need a message or a screen, a counter refused on the message's rows when asked and when written, the message's row's colours edited (colour keys, cursor limits, HOME, F, P; the editor's row, bar and arrow checked), following the row, and back to the screen's, S's preview, two files refused), a font of its own (read and shown in it, written with a message and a counter, a screen of all 256 characters, `-` back to the C64's own, a file too short, one read before a screen), each .lm the same as `tools/petscii.py`'s; first of all OZ GOLD, made from the disk's `ozgold.pet` with a counter at 24,24: the same file as the build's `ozgold.lm` |
 | `tests/petsciied.py [--machine x64sc\|x128] [--ntsc]` | PETSCII-ED on the C64, its menu and editor worked in one session: a .pet that isn't 40 x 25 refused, demo.pet read (the codes, the colours' low four bits, border, background, case), border, background and pen set, then keys typed in the editor, each step's screen against a model of it (letters in the pen's colour, reverse, a colour key, graphics keys, F3, F5, DEL, the cursor keys, HOME, RETURN, F2, F4, F6), F1's 256 characters and one chosen put in, F7 taking the screen back; written as ed.pet and read back from the disk image; a .64c font read (the editor in it, $D018 $1E, the font at $3800 the file's) and `-` the C64's own again; a new screen; Q asking with it not written |
 | `tests/piclmtest.py [--machine x128] [--ntsc]` | PICTURE-LM on the C64, its menu worked in one session: a Koala picture with the defaults, two sprites with every setting, S's preview (the VIC in bank 1, the sprites where line 3 put them) and the joystick moving them, then fire keeping the place, a hires picture (Art Studio's) with one sprite twice as big, a Doodle picture, four files and settings refused, line 9 set to drawn in and back; each .lm the same as `tools/picturelm.py`'s |
 | `tests/piclmtest.py --formats [--dir DIR]` | PICTURE-LM reading a picture in each of `tools/picturelm.py`'s formats (tests/picformats.py's, on a 1581; `--dir`: the pictures in a folder instead, such as RECOIL's examples) and saying which it is; each module the same as the PC tool's |
+| `tests/prglmtest.py [--pc] [--c64 [--ntsc] [--c128]] [--guide]` | a module made without `tools/build.py`: every demo module's parts as an assembler writes them (as built, and with `mb = $8000`) through `tools/prglm.py`, the same file as the build's `.lm`; PRG-LM (BASIC) run in VICE on a disk with such programs: Hello-Load with and without its build a bank lower, a module of two parts, a part that stays, a module there already (replaced, and kept), a build that doesn't move, a moving part with no build a bank lower and a missing file refused, no row reaching column 40, each `.lm` the same as the PC tool's; LMGUIDE.md's listings: the least module assembled, made a `.lm`, mastered as a `.prg`, as the `.lm`, first and second of a chain, and loaded, and PRG-LM's listing the same as `c64/prglm.bas`. In the suite |
+| `tests/tmproute.py --tmp DISK.d64 [--module least\|hello]` | the same with a real C64 assembler, Turbo Macro Pro v1.2 (its disk named with `--tmp`: from style64.org, not SlopLoad's to hand on, so not in the suite): LMGUIDE.md's least module or Hello-Load respelt for it (`.byte`, `.word`, a name for every `@` label, brackets round products, lines of one screen row), read in by its editor as a text file, assembled to disk with `mb = $c000` and `$8000`, then PRG-LM run on the two programs: the programs the same as `tools/asm6502.py`'s, the `.lm` the same as `tools/prglm.py`'s |
+| `tests/notescheck.py [--ntsc] [--c128] [--chapters N,N]` | SlopLoad 64's B side: every chapter of the notes within 39 columns and in characters NOTES prints, the index in order, the B-side disk and the .d81 holding exactly what the tools make now (NOTES, PRG-LM, the demo module, `least.s`, `hello.s`, the chapters); then NOTES in VICE from the disk: its list over its pages as the index, four chapters read to their end a key a page (each line as in the file, headings white, listings light blue), the next chapter offered after one, the back arrow, Q, and a disk with no notes (the drive's words, a drive asked for). In the suite |
 | `tests/picformats.py [--out DIR]` | a test picture in each format (the demo Koala's, or the hires test picture, each byte where its format puts it, junk in the rest), read back by `tools/picturelm.py` and made a module: its bitmap, screen, colours and background the picture's (no VICE) |
 | `tests/petsciifont.py` | PETSCII-Load in a font of its own on the PC (a few seconds): the modules `tools/petscii.py` makes for screens in a test font (each character different), every cell, the message, the space and the counter's digits showing the file's characters through the cut-down font, at $B800 or $B000 as it holds 128 or more; the C64's own set unchanged; a short `.64c` and broken `.petmate` fonts refused |
-| `tests/ozgoldcheck.py [--ntsc] [--c128 [--fast]] [--prg P] [--speed N] [--tap T] [--sid F] [--shots DIR] [--cutoff]` | OZ GOLD at every frame of a load: the VIC in bank 2 with the ROM font, screen and colours as designed, header byte 26 the blocks the tool says load while it runs, BLOCKS TO LOAD against the load's progress, one tick a frame (5 in 6 on NTSC), its own tune playing; once loaded, to the module's stop: 000 held, the tune's play routine called every tick with `$D418`'s volume falling 15 to 0 in 16 steps of 8 ticks, `$01` as the loader has it, the RAM under the SID unchanged; then the program's PASS (`--tap`: a tape SlopLoad 64 made; `--cutoff`: mastered with `-nomotor` and a program reaching into OZ GOLD's memory, so the loader cuts it off: the stop's two frames instead of the fade, the second a frame after the first with 000 drawn, the screen on and the SID silent) |
 | `tests/memdiff.py file.tap file.prg` | compare memory with the .prg when the loader exits |
 | `tests/channeltest.py ...` | load through a modelled deck (wow, flutter, peak shift) or through sound (`--audio wav\|mp3:192`, `--lowpass`, `--highpass`) |
-| `tests/suite.py [--jobs N] [--only NAME ...]` | all the load cases in parallel (PAL, NTSC, C128, decks, CD, MP3, a dull head below speed 0, the slowest speed on a slow deck and NTSC, a tape stopped or damaged while a game runs, the modules' own checks, the tool's options, the interrupt's cycle counts, SlopLoad 64's disk line and the C64 tools' way out, the loading sprites' pointers under a 63 KB program, the border's colour during a tape error): 284 cases |
+| `tests/suite.py [--jobs N] [--only NAME ...]` | all the load cases in parallel (PAL, NTSC, C128, decks, CD, MP3, a dull head below speed 0, the slowest speed on a slow deck and NTSC, a tape stopped or damaged while a game runs, the modules' own checks, the tool's options, the interrupt's cycle counts, SlopLoad 64's disk line and the C64 tools' way out, the loading sprites' pointers under a 63 KB program, the border's colour during a tape error, the tests' own clock): 303 cases |
 | `tests/sidcut.py [--quick]` | `tools/sidstrip.py -cut` on HVSC tunes: The Last Ninja song 5 (cut as its init leaves it, 3,808 bytes) and song 11 (the first cut fits), Golden Axe song 3, Mono song 1 (8 KB to 1.6 KB), Parsec song 3 (a copy loop up to the page past the end) and Hades Nebula song 2 (an address made by adding pages) cut, each `.slm` read back, played from the file and moved, against the whole tune (the same SID writes for 3,000 play calls); Fox Fights Back song 1 refused (it reads its own code as data); then Mono's cut song mastered beside Crossy-Load and loaded. In the suite |
 | `tests/options.py` | the PC tool's options without VICE (a few seconds): those a run would ignore refused with their reason (a picture with another show, PETSCII options without a screen, a module on a tape side, sound options for a `.tap`, a PRG tune's `-init`... with a `.sid` or a wrong value, one twice a frame beside a module...), and the usual ones still mastering (a PRG tune with the defaults and with every option) |
 | `tests/retrytest.py [--module none\|flappy\|crossy\|petscii] [--stage1] [--speed N] [--stripes STYLE] [--border N] [--expect N,E]` | a damaged block in the program (not the module's own: found by its load address), then a "rewind": the error flagged while the module runs, and the load finished. `--expect`: the border's colour as the error is flagged and a block after it cleared (N, or `any`), and while it is flagged (E: red, or pink where the border is red: `--stripes 2`, or PETSCII-Load's demo screen with `--border 2`); with a border of one colour or `block`, the flat core's `errshow` first, in the simulator, for every block number. `--stage1 --expect E`: the loader's own block damaged instead, in the tape's first second: stage 1 shows the error in colour E (pink where its border is red) and the load goes on |
@@ -1724,6 +1814,8 @@ that choose what is tested.
 | `tests/endcheck.py [--show picture\|picmusic\|music] [--hires art\|doodle] [--wait] [--fade] [--sid T] [--ntsc] [--c128]` | the show's ending: `-wait`'s PRESS SPACE OR FIRE against the character ROM's letters, doubled, drawn from line 251 and done before the row's lines; the program not starting by itself for three seconds, then on fire (port 2); `-fade` over 128 play calls, the volume only going down; a hires picture (Art Studio's or Doodle's layout) in hires mode as in the file |
 | `tests/waitcheck.py [--module NAME] [--wait [--end space\|game] \| --waitgame] [--countdown] [--hold N] [--ntsc] [--machine x128] [--poke] [--prg FILE]` | a module's ending and `-countdown`: at every look while it loads, the number after the bar against the progress the kit drew (blocks left, or the percent); without `-wait` the module ending within a few ticks of the load with no key (a game mid-round, a loading screen after its fade); with `-wait` it staying 600 ticks until SPACE (`--end space`; OZ GOLD's PRESS SPACE), or a game going on past its game over until SPACE (`--end game`); with `--waitgame` a game played past the load ending at its game over; the program's own check |
 | `tests/restorecheck.py [--module NAME\|none] [--ntsc] [--machine x128]` | RESTORE locked out: one NMI in stage 1, cia2's interrupt pending (the NMI line held low) at the core's start, at every look while it loads and at the exit, and clear once the program runs |
+| `tests/movecheck.py MODULE [--second] [--partner FILE] [--ntsc] [--c128] [--shots DIR]` | a module moved a VIC bank down, first in a chain (or `--second`) whether or not it must be (`slopload.py`'s test hook `SLOPLOAD_MOVE=first\|second`), in VICE with a stick that wanders: any read or write of $C000-$CFFF or $E000-$FFF9 by its code fails, with where it was as built (a relocation missed); its frame runs every frame, the VIC in bank 2; the program loads. Every demo module passes, first and second |
+| `tests/stagecheck.py [--first FILE] [--then FILE] [--sid FILE] [--ntsc] [--c128] [--shots DIR] [--tap T]` | a chain whose second keeps its screen where the first's is (a PETSCII screen, then OZ GOLD by default): the report says the second's screen is staged; in VICE, while the first shows, its screen changes only by its own counter and messages (40 bytes at most), never by the second's loading there; the second's bytes wait at their staging place, and at the second's init they are in place, byte for byte; the program loads |
 | `tests/chaincheck.py [--first FILE] [--then FILE] [--nosid] [--opts "..."] [--ntsc] [--c128] [--shots DIR] [--tap T --picture P]` | `-then` (or `--tap`: a chain SlopLoad 64 or the model wrote, `--first` and `--then` its .lm files): a PETSCII screen with a scroller and counter, then a picture (or a game): the first in VIC bank 2, its counter read every frame counting the second's blocks down to 000, never up; the screen off at the switch in the vertical blank; the core's frame vector then the second's; the picture as in the file; the tune's init called once (no restart) and the second's first play call within 2 frames of the screen going off (4 for a game); the program loaded. The tune with the first (`-musicstart first`; `--late`: with the second) |
 | `tests/musicfirst.py [--module M] [--then FILE] [--drawin] [--ntsc] [--c128] [--tap T]` | the music first (the default with a tune): the show module's init starting the tune once, its play calls at about 50 a second while the module's parts load (the screen off), the hand-over when its header's blocks are in (the core's vectors the module's, its +28 bit 4), and the tune keeping time through it and the module's init: no two play calls more than 1.5 frames apart (2.2 on NTSC), through a chain's switch too; never started again; the program loaded. `--tap`: a tape SlopLoad 64 wrote |
 | `tests/spritecheck.py [--sprites 1\|2] [--pos X,Y] [--colours C,...] [--mc A,B] [--expand] [--lm] [--drawin] [--prg FILE] [--tap FILE] [--ntsc] [--c128]` | `-sprite`: the VIC's sprite registers, pointers and bytes as asked, every store to the sprites' colour made outside their lines, the flash's colours in order, the pointers still the sprites' at the show's end (`--prg build/test_big.prg`: a program that covers them, its own bytes there once it is in), the program loaded; `--lm`: the same from a picture module file (`tools/picturelm.py`'s, `-module`), its picture, screen and colour RAM as in the file; `--drawin`: the picture drawn in; `--tap`: a tape SlopLoad 64 wrote with such a module, checked as it is |
@@ -1756,11 +1848,12 @@ that choose what is tested.
 | `tests/c64disk.py [--truedrive] [--many]` | SlopLoad 64's @ (the disk) in VICE: the directory listed, a file renamed and scratched through the command channel with the drive's answers checked, then RETURN alone: the menu again; `--many`: a directory long enough to stop for a key; `--truedrive`: an emulated 1541 |
 | `tests/c64exit.py [--machine x128] [--ntsc]` | SID-SLM, PICTURE-LM, PETSCII-LM and the TAP writer left for BASIC: its pointers as a fresh machine has them (the tools keep theirs in the same bytes: a LOAD after one went astray) |
 | `tests/c64tool.py [--prg FILE] [--name NAME] [--start HEX] [--speed N] [--module NAME\|FILE.lm] [--wait \| --waitgame] [--countdown] [--musicstart before\|first\|second] [--chain FILE.lm [--chainrefused TEXT]] [--music FILE.sid\|FILE.slm\|FILE.prg [--prgtune a=HH,init=HHHH,play=HHHH,calls=N,ntsc=1]] [--cleared] [--colours STYLE\|C,C,...] [--effect NAME [--fxn N]] [--cycle] [--showl] [--out tap\|tape] [--machine x64sc\|x128\|xscpu64] [--xmem reu\|sram] [--reusize KB] [--says TEXT] [--fast] [--dirfirst] [--tapdisk d64\|d81] [--scpurom cmd] [--tname TEXT] [--expect TEXT] [--tuneat HEX,N] [--then MODULE] [--prgdrive 8\|9] [--chaindrive 10] [--ntsc] [--kernal FILE] [--load]` | SlopLoad 64 in VICE, its menu worked through the keyboard (each "press any key" answered): its .tap (or the cassette it recorded) against `tools/c64model.py`'s, then loaded. A `.sid` or a PRG tune is made a `.slm` by SID-SLM first, on the same disk (`--prgtune`: a PRG tune's menu lines 3-6). `--fast`: a C128's 2 MHz forced on at the start; `--tapdisk`: the .tap to a 1541 or 1581 image (true drive emulation); `--scpurom cmd`: CMD's SuperCPU ROM; `--cleared`: the module and tune chosen, then cleared with 0 (the tape has neither); `--colours`: line 7 (a palette's name, or your own colours: one number, a plain border); `--effect`: line 8 (none, classic, sloppy, thin ... line, block; `--fxn` and, ora, eor and line's value), `--cycle` (only with a plain border, thin, eor or line) and `--showl` its questions (and line 8's list checked: each effect's words, and its colours on the row under them as line 7's make them); `--dirfirst`: `$` at line 1's name first, the drive's files listed with the program among them; `--tname`: the name on tape typed as keys (`{clr}{white}...`); `--expect`: a refusal it must stop with; `--tuneat c000,1`: where the tune must go and the header's +24; `--then`: a second tape in the same session with that module, against the model too; `--prgdrive 9`: the program read from drive 9, with the .tap; `--ntsc`; `--kernal FILE`: another KERNAL (x128: its C64 mode's), such as JiffyDOS: the cassette must come out the same. To the cassette, the motor must be off each time a block is coded (PLAY is down all along). After a tape (not with `--then`) a key is pressed and the menu must come back as it was before it |
-| `tests/c64suite.py [--jobs N] [--only NAME ...] [--list]` | SlopLoad 64's 117 cases in parallel: every kind of show, speeds below 0, modules (the games, OZ GOLD and PETSCII-Load, and PETSCII-Load in a font of its own, one beside a 63 KB program, loaded), tunes (a `.sid` made a `.slm` by SID-SLM, PRG tunes made `.slm` files by SID-SLM's menu (one beside a module, loaded, one twice a frame alone), `.slm` files from the PC and the disk, one moved, then a second tape in the session with another module, one song of a tune too big for SlopLoad 64 cut by `sidstrip.py -cut`), a module and a tune chosen then cleared, pictures as modules (PICTURE-LM's: Koala, the disk's own, one with a tune that must move, hires ones with their own wait), loading lines (palettes, your own colours, block, one colour, no effect on a palette, your own colours and rainbow, the effects from line 7's colours, on through a module, a picture and music), cassette and REU (512 KB, 1 MB, 16 MB: its size said), C128, SuperCPU, 1581, 63 KB, a SYS start, the program read from drive 9 (VICE's host folder, a 1541 image), a tune in SlopLoad's own player (a `.slm` made on the PC at $C000 beside a game, loaded, and for the show's NTSC pitch; a `.sid`, and a module that makes no effects, where the tune is), the tune alone's fade, a picture module's own ending (wait and fade), hires pictures (Art Studio's, loaded; Doodle's on NTSC), the border cycle (under an effect it shows under, one colour, a plain black border to the cassette), a picture module from `tools/picturelm.py` with two sprites and a tune (loaded), one drawn in (with a tune, and as a chain's first; loaded), each with a 63 KB program that covers the sprites' pointers (the tape then loaded by `tests/spritecheck.py --tap`), a PETSCII screen with Novaload's screech first in a chain, the tune with the second (loaded), and ten refusals (a module that keeps its border, with the lines on through it; the cassette on a SuperCPU; six tunes; a .tap with no room on its disk; a chain's modules sharing memory). After every tape the menu must come back as it was |
+| `tests/c64suite.py [--jobs N] [--only NAME ...] [--list]` | SlopLoad 64's 129 cases in parallel: every kind of show, speeds below 0, modules (the games, OZ GOLD and PETSCII-Load, and PETSCII-Load in a font of its own, one beside a 63 KB program, loaded), tunes (a `.sid` made a `.slm` by SID-SLM, PRG tunes made `.slm` files by SID-SLM's menu (one beside a module, loaded, one twice a frame alone), `.slm` files from the PC and the disk, one moved, then a second tape in the session with another module, one song of a tune too big for SlopLoad 64 cut by `sidstrip.py -cut`), a module and a tune chosen then cleared, pictures as modules (PICTURE-LM's: Koala, the disk's own, one with a tune that must move, hires ones with their own wait), loading lines (palettes, your own colours, block, one colour, no effect on a palette, your own colours and rainbow, the effects from line 7's colours, on through a module, a picture and music), cassette and REU (512 KB, 1 MB, 16 MB: its size said), C128, SuperCPU, 1581, 63 KB, a SYS start, the program read from drive 9 (VICE's host folder, a 1541 image), a tune in SlopLoad's own player (a `.slm` made on the PC at $C000 beside a game, loaded, and for the show's NTSC pitch; a `.sid`, and a module that makes no effects, where the tune is), the tune alone's fade, a picture module's own ending (wait and fade), hires pictures (Art Studio's, loaded; Doodle's on NTSC), the border cycle (under an effect it shows under, one colour, a plain black border to the cassette), a picture module from `tools/picturelm.py` with two sprites and a tune (loaded), one drawn in (with a tune, and as a chain's first; loaded), each with a 63 KB program that covers the sprites' pointers (the tape then loaded by `tests/spritecheck.py --tap`), a PETSCII screen with Novaload's screech first in a chain, the tune with the second (loaded), chains that move the first module a VIC bank down (two games, loaded; a game and a picture, the music first; a game and a PETSCII screen, loaded) or the second (a game and OZ GOLD, loaded, and with the music first; a game and a PETSCII screen to the cassette, and from an REU), chains of two screens at $BC00, the second's staged (a PETSCII screen then OZ GOLD, loaded; OZ GOLD then a PETSCII screen to the cassette; two PETSCII screens, the music first, loaded; from an REU), a picture then OZ GOLD (the picture's file fills SlopLoad 64's memory, so OZ GOLD moves, loaded), and ten refusals (a module that keeps its border, with the lines on through it; the cassette on a SuperCPU; six tunes; a .tap with no room on its disk; a chain's modules sharing memory, even one a bank lower: two pictures). After every tape the menu must come back as it was |
 | `tests/c64modes.py` | SlopLoad 64's core made in one loading-lines mode after another in the same session (rainbow, styles, block, one colour in three colours, and back): each as that mode alone makes it |
 | `tests/trialtest.py [tunes...] [-n CALLS] [--vice] [--src 50\|e0\|both] [--synth] [--lockstep] [--trial] [-v]` | SID-SLM's trial run (`c64/trial.asm`) in the simulator and in VICE against `tools/sidstrip.py`, tune by tune and instruction by instruction |
 | `tests/sidslm.py [--machine x128] [--ntsc] [--quick] [--prg]` | SID-SLM in VICE, its menu worked through the keyboard (`--prg`: the PRG tunes only, on a second disk in drive 9 as always): `$`, `$:E*` and `@` with a command at line 1's file question first (the text's colour kept after "more"); tunes made `.slm` files (a song chosen on line 2, a CIA-timed tune, a name replaced), each compared with the PC's check of the same 3,000 play calls field by field; PRG tunes (lines 3-6: the defaults; init's A, twice a frame, NTSC; init and play typed; Mono's, over 4 KB, cut), each against `sidstrip.py` with the same settings, and the menu's init line checked; seven refusals, each with the PC's reason (a PRG too short to be a tune one); then songs of tunes over 4 KB cut (Mono song 1 written, against `tests/cuttest.py`'s reference cut tried over 15,000 play calls; Golden Axe song 3 still over 4,096 bytes; Fox Fights Back song 1 plays differently cut; the Last Ninja, 35 KB, its pages read from the disk again: song 11 written, song 5 written as its init leaves it, its first cut over 4,096), with the C64 minutes each took |
 | `tests/cuttest.py [tune.sid[:song] ...] [-n CALLS] [--vice] [--pc] [--paged N] [--after]` | SID-SLM's cut (`c64/sidcut.asm`) in the simulator (or VICE) against `tools/sidstrip.py`'s `cut_pages`, step by step: the code run, the bytes used, the trace's marks, spans and compares, the static walk, the ends, the pages kept and their places, the cut's bytes, init and play; its opcode tables against the simulator's. A cut over 4,096 bytes (any, with `--after`) is made again as the tune's init leaves it (`cutafter` against `after_init`): that tune's range and stub, then the same comparisons. `--paged N`: only N of the tune's pages in memory, the rest read in as the cut asks (a tune too big to lie whole, as the Last Ninja, is paged with 40). In the suite (`sid-cut-c64`, and `sid-cut-c64-paged` with 6 pages) |
+| `tests/trackcheck.py [--ntsc]` | the tests' own monitor client (`tests/vicemon.py`) at the READY prompt: the clock and the last instruction at a stop, the same however a run is cut into legs, and VICE 3.10's CPU history command caught where it never answers (`tests/vicefault.md` says why; `tests/vicefault.py` shows the fault with nothing of SlopLoad's). In the suite (`track-check`, `track-check-ntsc`) |
 
 They start their own headless VICE (`tests/vicerun.py`) with a throwaway
 config, so your VICE settings are never touched.

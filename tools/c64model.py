@@ -201,18 +201,39 @@ class Refused(S.Fail):
     """SlopLoad 64 says no: the reason, as it prints it"""
 
 
-def load_lm(spec):
+def moved_claims(claims):
+    """claims as they are a VIC bank down (SlopLoad 64's gclaims with gcmv,
+    slopload.py's move_game): each from $C000 on $4000 lower, its end too
+    (to the end, $FFFF or $10000: $C000)"""
+    return [(lo - 0x4000, 0xc000 if hi >= 0xffff else hi - 0x4000) if lo >= 0xc000 else (lo, hi)
+            for lo, hi in claims]
+
+
+def load_lm(spec, moved=None):
     """a module in one file (MODULES.md: each part's address, length
-    and bytes, the main part first): its parts, header and claims"""
-    path = spec if os.path.exists(spec) else os.path.join(BUILD, 'modules', spec + '.lm')
-    d = open(path, 'rb').read()
-    parts, i = [], 0
-    while i + 4 <= len(d):
-        a, n = d[i] | d[i + 1] << 8, d[i + 2] | d[i + 3] << 8
-        if i + 4 + n > len(d):
-            raise Refused(f"{os.path.basename(path)}: a part runs past the file's end")
-        parts.append((a, bytes(d[i + 4:i + 4 + n])))
-        i += 4 + n
+    and bytes, the main part first, then its relocations): its parts,
+    header and claims, the relocations' length (rlen: the block's, less
+    its address and length); moved: such a module (load_lm's), a VIC
+    bank down (lmreloc.py: its claims moved_claims'), or None if it can't
+    move. SlopLoad 64 reads a module into its pool (HP_MAX bytes): one
+    longer is read to there (fload), so its parts must fit, and its
+    relocations past the pool's end can't be used: it can't move"""
+    import lmreloc as LR
+    if moved is not None:
+        if not LR.movable(moved['parts'], moved['rel']) or os.path.getsize(moved['path']) > HP_MAX:
+            return None
+        path, rel, rlen = moved['path'], moved['rel'], moved['rlen']
+        parts = LR.moved(moved['parts'], rel)
+    else:
+        path = spec if os.path.exists(spec) else os.path.join(BUILD, 'modules', spec + '.lm')
+        d = open(path, 'rb').read()
+        try:
+            parts, rel = LR.split(d)
+        except LR.Bad as ex:
+            raise Refused(f"{os.path.basename(path)}: {ex}")
+        rlen = len(d) - sum(4 + len(pd) for _, pd in parts) - 4 if rel is not None else 0
+        if sum(4 + len(pd) for _, pd in parts) > HP_MAX:
+            raise Refused("not a module (.lm)")
     if not parts or parts[0][1][:4] != b'PLG1' or len(parts[0][1]) < 32:
         raise Refused(f"{os.path.basename(path)}: not a module (no PLG1)")
     a, m = parts[0]
@@ -222,12 +243,46 @@ def load_lm(spec):
     if jit > S.GAME_JITTER_MAX:
         raise Refused(f"its jitter is {jit}: 64 at most")
     claims = [(a, claim)] + [(pa, pa + len(pd)) for pa, pd in parts[1:]]
+    if moved:
+        claims = moved_claims(moved['claims'])
     for lo, hi in claims:
         for blo, bhi in ((0, 0x800), (0xfffa, 0x10000)):
             if lo < bhi and hi > blo:
                 raise Refused(f"it needs ${lo:04X}-${hi - 1:04X}, the loader's memory")
-    return dict(path=path, parts=parts, addr=a, init=w(4), frame=w(6), stop=w(8), claims=claims,
-                jitter=jit, share=m[14] or S.GAME_SHARE_DEFAULT)
+    if moved and any(overlaps(c, claims[i + 1:]) for i, c in enumerate(claims)):
+        return None                     # (a bank down, its parts on one that stays)
+    return dict(path=path, parts=parts, rel=rel, rlen=rlen, moved=bool(moved), addr=a, init=w(4),
+                frame=w(6), stop=w(8), claims=claims, jitter=jit, share=m[14] or S.GAME_SHARE_DEFAULT)
+
+
+HP_MAX = 0xfffa - 0xd000      # SlopLoad 64's high pool
+BL_MAX = 512                  # ... and its buffer for a moved second's relocations where the pool is
+                              # full (a first that fills it: a picture)
+
+
+def chain_fit(g, b):
+    """SlopLoad 64's chain (chain.asm's chfit, slopload.py's chain_fit): its
+    two modules as they are, else the first moved a VIC bank down, else the
+    second (its relocations kept after the first's file in the high pool,
+    or where that is full in a buffer of BL_MAX bytes: they must fit one);
+    as they are and with the first moved, the second's
+    parts below $C000 may be staged (S.chain_stage: loaded at a free page,
+    copied to their place at the switch); else refused. (g, b)"""
+    clash = lambda x, y: any(overlaps(r, y['claims']) for r in x['claims'])
+    if not clash(g, b):
+        return g, b
+    ma = load_lm(None, moved=g)
+    if ma is not None and not clash(ma, b):
+        return ma, b
+    mb = load_lm(None, moved=b)
+    if (mb is not None and (os.path.getsize(g['path']) + b['rlen'] <= HP_MAX or b['rlen'] <= BL_MAX)
+            and not clash(g, mb)):
+        return g, mb
+    for x in (g, ma):                            # (last: the second's parts below $C000 staged)
+        z = S.chain_stage(x, b) if x is not None else None
+        if z is not None:
+            return x, z
+    raise Refused("the two modules share memory")
 
 
 def slm_music(path):
@@ -430,8 +485,8 @@ def setup(show, game=None, music=None, prog=(0x0801, 0x0802), wait=False, fade=F
     if show == 'module':
         g = load_lm(game)
         b = load_lm(then) if then is not None else None
-        if b and any(overlaps(r, b['claims']) for r in g['claims']):
-            raise Refused("the two modules share memory")
+        if b:
+            g, b = chain_fit(g, b)
         both = g['claims'] + (b['claims'] if b else [])
         if m is not None:
             for x in [g] + ([b] if b else []):
@@ -456,7 +511,8 @@ def setup(show, game=None, music=None, prog=(0x0801, 0x0802), wait=False, fade=F
         drawin = bool(len(head) > 28 and head[27] & 0x40 and head[15] != 0xff and head[25] == 0)
         stage = None                        # the music first: the show module, where SlopLoad 64's
         if (m is not None and mstart == 'before' and len(head) > 27 and head[27] & 0x10    # mfirst
-                and os.path.getsize(g['path']) < 0x2800 and not drawin):
+                and os.path.getsize(g['path']) + (b['rlen'] if b and b['moved'] else 0) < 0x2800
+                and not drawin):
             sm = show_module()
             base = place_show(sm['claim'], music_ranges(m) + both, prog)
             try:
@@ -508,7 +564,10 @@ def setup(show, game=None, music=None, prog=(0x0801, 0x0802), wait=False, fade=F
             if m is not None and bk & 0x10 and not late:
                 bh[28] |= 0x10
             bd = b['parts'][0][1]
-            mod.update(chain=dict(b=b, parts=[(b['addr'], bytes(bh))] + b['parts'][1:]),
+            st = b.get('stage')             # (its parts below $C000 staged: where they load)
+            mod.update(chain=dict(b=b, parts=[(b['addr'], bytes(bh))]
+                                  + [((st['to'] + a - st['at']) if st and a < 0xc000 else a, d)
+                                     for a, d in b['parts'][1:]]),
                        cjit=g['jitter'], cshare=g['share'], jitter=b['jitter'], share=b['share'],
                        bord=mod['bord'] and len(bd) > 27 and bd[27] & 1)
     else:

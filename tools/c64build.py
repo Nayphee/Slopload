@@ -28,6 +28,9 @@ import c64words as W  # noqa: E402
 BUILD = os.path.join(ROOT, 'build')
 C64 = os.path.join(ROOT, 'c64')
 C1541 = os.environ.get('VICE_C1541', os.path.expanduser('~/Documents/vice-3.10/build-headless/src/c1541'))
+# on the 1581's disk only (the 1541's is full: every module carries its
+# relocations): LMGUIDE.md's module
+D81_ONLY = [(os.path.join(BUILD, 'modules', 'hello.lm'), 'hello-load.lm')]
 # the demo files on SlopLoad 64's disk: (source, name on the disk)
 DEMOS = [(os.path.join(BUILD, 'modules', 'flappy.lm'), 'flappy-load.lm'),
          (os.path.join(BUILD, 'modules', 'crossy.lm'), 'crossy-load.lm'),
@@ -38,6 +41,8 @@ DEMOS = [(os.path.join(BUILD, 'modules', 'flappy.lm'), 'flappy-load.lm'),
          (os.path.join(BUILD, 'modules', 'petscii.lm'), 'petscii.lm'),
          (os.path.join(ROOT, 'modules', 'petscii', 'demo.pet'), 'demo.pet'),
          (os.path.join(ROOT, 'modules', 'petscii', 'serial.pet'), 'serial.pet'),     # (a mock of Novaload's boot screen)
+         (os.path.join(ROOT, 'modules', 'ozgold', 'ozgold.pet'), 'ozgold.pet'),       # (OZ GOLD's screen: ozgold.lm is
+                                                                                    # PETSCII-LM's module of it, counter 24,24)
          (os.path.join(ROOT, 'pictures', 'slopload.koa'), 'slopload.koa'),
          (os.path.join(ROOT, 'pictures', 'cassette.spr'), 'cassette.spr'),     # (a loading sprite: PICTURE-LM's 2)
          (os.path.join(ROOT, 'music', 'build', 'slopload.sid'), 'slopload.sid'),
@@ -139,11 +144,12 @@ def payload():
     # SHOW_BASE and the offsets of its address high bytes, to move it
     sm = M.show_module()
     out += asm_bytes("pl_show", sm['data'])
-    assert len(sm['data']) <= 0xc100 - 0xb000, "the show module outgrows SlopLoad 64's showtmp ($b000-$c0ff)"
-    assert len(sm['relocs']) <= 255, "the show module has more relocations than prshow's loop takes"
-    out += [f"showlen = {len(sm['data'])}", f"showclaim = {sm['claim']}", f"showbase = ${M.SHOW_BASE:04x}",
-            f"nshowrel = {len(sm['relocs'])}"]
-    out += lohi("showrel", sm['relocs'])
+    assert len(sm['data']) <= 0xc000 - 0xb000, "the show module outgrows SlopLoad 64's showtmp ($b000-$bfff)"
+    gaps = [b - a for a, b in zip([-1] + sorted(sm['relocs']), sorted(sm['relocs']))]
+    assert all(1 <= g <= 255 for g in gaps) and len(gaps) < 256, \
+        "the show module's relocations: a gap over 255, or more than prshow's loop takes"
+    out += [f"showlen = {len(sm['data'])}", f"showclaim = {sm['claim']}", f"showbase = ${M.SHOW_BASE:04x}"]
+    out += asm_bytes("showrel", gaps + [0])     # (each a gap from the last: setup.asm's prshow)
     # per speed: the boot set
     # (indexed by opt_speed: the speed + spneg, -12 to 13)
     boot = [M.best_set(max(S.H_MIN_BOOT, S.speed_h(s)), M.PMIN) for s in S.SPEEDS]
@@ -166,8 +172,12 @@ def payload():
     sw = S.chain_shim(dict(frame=0, stop=0), dict(init=0, frame=0, stop=0), 0, cs)
     cl = S.sym('chain_placed')
     assert sw['data'][cl['cafr'] - sw['addr']:] == bytes(12) and cl['cpst'] == cl['cafr'] + 10
-    out += ["", "; a chain's switch (src/chain.asm): its 12 bytes at swvec filled in",
+    assert sw['data'][cl['cst'] + 1 - sw['addr']] == 0 and sw['data'][cl['csl'] + 2 - sw['addr']] == 0xc0
+    out += ["", "; a chain's switch (src/chain.asm): its 12 bytes at swvec filled in, and",
+            "; the second's staged pages: how many (swst), from (swsrc), to (swdst)",
             f"chainat = ${sw['addr']:04x}", f"swlen = {len(sw['data'])}", f"swvec = {cl['cafr'] - sw['addr']}",
+            f"swst = {cl['cst'] + 1 - sw['addr']}", f"swsrc = {cl['csl'] + 2 - sw['addr']}",
+            f"swdst = {cl['css'] + 2 - sw['addr']}",
             f"swframe = ${sw['cframe']:04x}", f"swstop = ${sw['cstop']:04x}"]
     out += asm_bytes("pl_sw", sw['data'])
     # (here, before the core: from pl_core on the buffers go, and what is
@@ -421,10 +431,17 @@ def main():
     if lost:
         raise SystemExit(f"slopload64: {', '.join(lost)} where the buffers go (from bss, ${labs['bss']:04X}):"
                          " gone once a tape has been made")
-    if labs['mpoolend'] > 0xa000:
-        raise SystemExit(f"slopload64: the music pool runs past $9fff (by {labs['mpoolend'] - 0xa000} bytes)")
-    assert labs['bhdr'] - labs['bsave'] == labs['gorig'] + 9 - labs['gnp'], "chain.asm: bsave isn't gnp-gorig's size"
-    print(f"            {0x8f00 - labs['bssend']} bytes to spare before the music pool moves past $9fff")
+    if labs['mpoolend'] > labs['blbuf']:    # (then blbuf, a moved second's relocations: chain.asm)
+        raise SystemExit(f"slopload64: the music pool runs past ${labs['blbuf'] - 1:04x} (by"
+                         f" {labs['mpoolend'] - labs['blbuf']} bytes)")
+    assert labs['blbuf'] + labs['blmax'] == 0xa000 and labs['blhi'] < 0x0400
+    assert labs['bsave'] + labs['gorig'] + 9 - labs['gnp'] <= 0xd000, "chain.asm: bsave (gnp-gorig's size) past $cfff"
+    assert labs['bufsend'] <= labs['coreb'], "setup.asm: its lists run into the core at $cb00"
+    assert labs['gself'] < 0xd000, "chain.asm: its buffers past $cfff"
+    assert labs['mok'] < 0x033c and 0x03ee <= labs['mnrel'] and labs['blhi'] < 0x0400, \
+        "SlopLoad 64: its variables in the tape buffer's spare bytes run into c2ins ($033c-$03ed) or past $03ff"
+    print(f"            {labs['blbuf'] - 0x1100 - labs['bssend']} bytes to spare before the music pool moves past"
+          f" ${labs['blbuf'] - 1:04X}")
     # the TAP writer (a .tap to a cassette, with an REU)
     org, data, labs = B.assemble(os.path.join(C64, 'tapwriter.asm'), 'tapwriter', {})
     assert org == 0x0801, hex(org)
@@ -433,13 +450,14 @@ def main():
     print(f"tapwriter   ${org:04X}-${org + len(data) - 1:04X}  {len(data)} bytes; buffers to ${labs['bssend']:04X}")
     # PETSCII-LM (a .pet screen to a PETSCII-Load module), with that
     # module's .lm in it: the places it writes the screen into
-    lm = open(os.path.join(BUILD, 'modules', 'petscii.lm'), 'rb').read()
-    ma, ml = lm[0] | lm[1] << 8, lm[2] | lm[3] << 8
-    main_, low = lm[4:4 + ml], lm[4 + ml + 4:]
-    la = lm[4 + ml] | lm[4 + ml + 1] << 8
-    assert main_[:4] == b'PLG1' and len(low) == 1000 and len(lm) == 4 + ml + 4 + 1000, len(lm)
+    import lmreloc as LR
     import petscii as PS
+    (ma, main_), (la, low) = PS.read_lm(os.path.join(BUILD, 'modules', 'petscii.lm'))
+    ml = len(main_)
+    assert main_[:4] == b'PLG1' and len(low) == 1000 and main_[27] & LR.FLAG
     code = ml - (main_[PS.EXT_AT + 4] | main_[PS.EXT_AT + 5] << 8)     # (the demo's message off)
+    prel = PS.relocs([(ma, main_), (la, low)])[0][0]                   # (its relocations, the message's off)
+    gaps = LR.encode([prel])[4:-1]                                      # (the main part's list and its 0)
     out = ["; generated by tools/c64build.py from build/modules/petscii.lm - do not edit",
            "; PETSCII-Load's module: its main part less the demo's message, and its",
            "; second part. PETSCII-LM writes a screen and its settings into them",
@@ -461,15 +479,12 @@ def main():
             "lmscr = $c100                  ; (1000: to $c4e7; msgbuf at $c000)",
             "", "; the top lines: the release",
             head_line('petscii-lm', 'a petscii screen to a loader module', 30)]
-    # the same built at $a000 for a chain (tools/build.py's petscii_chain.prg):
-    # the bytes they differ in, each an address's high byte $40 less
-    ch = open(os.path.join(BUILD, 'modules', 'petscii_chain.prg'), 'rb').read()
-    assert ch[0] | ch[1] << 8 == ma - 0x4000 and len(ch) - 2 == ml
-    rel = [i for i in range(code) if ch[2 + i] != main_[i]]
-    assert all(main_[i] ^ ch[2 + i] == 0x40 for i in rel) and 11 in rel and len(rel) <= 255
-    assert ch[2 + code:] == main_[code:], "petscii_chain.prg: its message differs"
-    out += ["", "; built at $a000 for a chain: the bytes that differ (eor $40)", f"lmnrel = {len(rel)}"]
-    out += asm_bytes('lmrlo', [i & 255 for i in rel], 20) + asm_bytes('lmrhi', [i >> 8 for i in rel], 20)
+    # its relocations (lmreloc.py): the main part's list, each a gap from
+    # the last, and its 0 (the font's and the screen's: none)
+    assert 11 in prel, "PETSCII-Load: its claim (+10) isn't relocated"
+    out += ["", "; its relocations: the main part's (MODULES.md, \"A module that moves\")",
+            f"lmreln = {len(gaps)}"]
+    out += asm_bytes('lmrel', gaps, 20)
     open(os.path.join(C64, 'petlm.asm'), 'w').write("\n".join(out) + "\n")
     org, data, labs = B.assemble(os.path.join(C64, 'petsciilm.asm'), 'petsciilm', {})
     assert org == 0x0801, hex(org)
@@ -512,6 +527,22 @@ def main():
            f"lmlen = {len(mdata)}                 ; its bytes",
            f"lmclaim = ${mlabs['modend']:04x}              ; the end of what it claims (its scratch after them)"]
     out += asm_bytes('pl_lm', mdata, 20)
+    # its relocations (picturelm.py's relocs: lmreloc.py), with the colours'
+    # place (+77) and without: the same but where the gaps meet +77
+    import lmreloc as LR
+    lists = PL.relocs([(PL.LM_BASE, mdata + bytes(0xcc00 - PL.LM_BASE - len(mdata))), (0xe000, b'')])
+    base = [o for o in lists[0][0] if o != 77]
+    enc = [LR.encode([sorted(base + c), []], lists[1])[4:] for c in ([], [77])]
+    pre = next(i for i in range(min(map(len, enc))) if enc[0][i] != enc[1][i])
+    suf = next(i for i in range(1, min(map(len, enc))) if enc[0][-i] != enc[1][-i]) - 1
+    assert 77 not in base and lists[1] == [25] and pre > 0 and suf > 0
+    out += ["", "; its relocations (MODULES.md, \"A module that moves\"): the same with",
+            "; the colours' place (+77) and without, but for the gaps around it",
+            f"pmlen0 = {len(enc[0])}", f"pmlen1 = {len(enc[1])}"]
+    out += asm_bytes('pmrp', enc[0][:pre], 20) + [f"pmrpn = {pre}"]
+    out += asm_bytes('pmo', enc[0][pre:len(enc[0]) - suf], 20) + [f"pmon = {len(enc[0]) - suf - pre}"]
+    out += asm_bytes('pmw', enc[1][pre:len(enc[1]) - suf], 20) + [f"pmwn = {len(enc[1]) - suf - pre}"]
+    out += asm_bytes('pmrs', enc[0][len(enc[0]) - suf:], 20) + [f"pmrsn = {suf}"]
     out += ["", "; the top lines: the release", head_line('picture-lm', 'a picture to a loader module', 30)]
     # the picture formats (picturelm.py's FORMATS): lengths, load address
     # (0 any, $ff a bitmap's, else its high byte), kind (bit 0 hires, bit 1
@@ -556,6 +587,52 @@ def main():
     open(pe, 'wb').write(bytes([1, 8]) + bytes(data))
     print(f"petscii-ed  ${org:04X}-${org + len(data) - 1:04X}  {len(data)} bytes; buffers to ${labs['bssend']:04X},"
           f" its font ${labs['fontbuf']:04X}")
+    # NOTES (the suite's instructions read on the C64: tools/c64docs.py's chapters)
+    open(os.path.join(C64, 'noteshd.asm'), 'w').write(
+        "; generated by tools/c64build.py - do not edit\n; the top lines: the release\n"
+        + head_line('notes', "the suite's instructions, on the disk", 30) + "\n")
+    org, data, labs = B.assemble(os.path.join(C64, 'notes.asm'), 'notes', {})
+    assert org == 0x0801, hex(org)
+    pn = os.path.join(BUILD, 'notes.prg')
+    open(pn, 'wb').write(bytes([1, 8]) + bytes(data))
+    print(f"notes       ${org:04X}-${org + len(data) - 1:04X}  {len(data)} bytes; its list to ${labs['idxend'] - 1:04X}")
+    # PRG-LM (BASIC: a module's .lm from the programs an assembler wrote;
+    # LMGUIDE.md prints its listing, for typing in)
+    import bastok
+    bas = bastok.tokenise(open(os.path.join(C64, 'prglm.bas')).read())
+    pb = os.path.join(BUILD, 'prg-lm.prg')
+    open(pb, 'wb').write(bas)
+    print(f"prg-lm      BASIC, {len(bas) - 2} bytes ({-(-len(bas) // 254)} blocks: on the B side)")
+    # the B side: NOTES and its chapters (the documents as the C64 reads them), PRG-LM, the demo
+    # module and the two sources LMGUIDE.md goes through, spelt for an assembler on the C64 and
+    # written as the text files it reads. A 1541 disk of its own, and on the .d81 as well
+    import c64docs
+    import tmpsrc
+    bdir = os.path.join(BUILD, 'bside')
+    os.makedirs(bdir, exist_ok=True)
+    for old in os.listdir(bdir):
+        os.remove(os.path.join(bdir, old))
+    chapters, index = c64docs.chapters()
+    least = c64docs.listing(open(os.path.join(ROOT, 'LMGUIDE.md')).read(), 'least.asm')
+    hello = open(os.path.join(ROOT, 'modules', 'hello', 'hello.asm')).read()
+    texts = [('least.s', tmpsrc.seq(tmpsrc.respell(least))), ('hello.s', tmpsrc.seq(tmpsrc.respell(hello))),
+             ('notes.idx', index)] + [(c['file'], c['data']) for c in chapters]
+    SIDE_B = [(pn, 'notes'), (pb, 'prg-lm')] + D81_ONLY
+    for name, data in texts:
+        open(os.path.join(bdir, name), 'wb').write(data)
+        SIDE_B.append((os.path.join(bdir, name), name + ',s'))
+    blocks = sum(-(-os.path.getsize(src) // 254) for src, _ in SIDE_B)
+    if blocks > 664:
+        raise SystemExit(f"the B side: {blocks} blocks, 664 on a 1541 disk")
+    print(f"the B side  {len(chapters)} chapters of notes ({sum(len(c['data']) for c in chapters)} bytes), least.s,"
+          f" hello.s, notes, prg-lm, hello-load.lm: {blocks} of 664 blocks")
+    path = os.path.join(BUILD, 'slopload64-b.d64')
+    if os.path.exists(path):
+        os.remove(path)
+    cmd = [C1541, '-format', 'slopload side b,sb', 'd64', path]
+    for src, name in SIDE_B:
+        cmd += ['-write', src, name]
+    subprocess.run(cmd, check=True, capture_output=True)
     demo_slm()
     for img, kind in (('slopload64.d64', 'd64'), ('slopload64.d81', 'd81')):
         path = os.path.join(BUILD, img)
@@ -564,11 +641,11 @@ def main():
         cmd = [C1541, '-format', f'slopload {version()},sl', kind, path, '-write', prg, 'slopload64', '-write', tw, 'tapwriter',
                '-write', pl, 'petscii-lm', '-write', ss, 'sid-slm', '-write', pm, 'picture-lm',
                '-write', pe, 'petscii-ed']
-        for src, name in DEMOS:
+        for src, name in DEMOS + (SIDE_B if kind == 'd81' else []):     # (the .d81: both sides)
             cmd += ['-write', src, name]
         subprocess.run(cmd, check=True, capture_output=True)
     print("  build/slopload64.d64, build/slopload64.d81 (with tapwriter, petscii-lm, sid-slm, picture-lm, petscii-ed, "
-          + ', '.join(n for _, n in DEMOS) + ")")
+          + ', '.join(n for _, n in DEMOS) + "; the .d81 the B side too), build/slopload64-b.d64")
 
 
 if __name__ == '__main__':

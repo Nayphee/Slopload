@@ -374,7 +374,7 @@ A module is a PRG with this header at its load address:
                       2 a SID tune (all three voices; stop: clear the SID)
 +25           (byte) the show module: the picture's VIC bank ($DD00 bits)
 +26 blocks    (byte) set by the tool for a module: the program's size in disk
-                      blocks (OZ GOLD counts them down)
+                      blocks (a PETSCII screen's counter counts them down)
 +27 keeps     (byte) the module's: bit 0 the border to the loader (-showstripes),
                       1 effects on voice 3, 2 -wait, 3 -countdown
 +28 options   (byte) set by the tool: bit 1 -wait (SPACE alone starts the
@@ -405,8 +405,8 @@ for module authors in [MODULES.md](MODULES.md): the header
 (`src/modhead.asm`), the shared kit (`src/modkit.asm`: status line,
 start key, fire, music), when the program starts, the debug hooks, the
 memory a module may use (including a second part), and the tests a
-module passes. Flappy-Load, Crossy-Load, the minimal Template-Load,
-OZ GOLD and PETSCII-Load all keep it.
+module passes. Flappy-Load, Crossy-Load, the minimal Template-Load
+and PETSCII-Load (OZ GOLD is a screen in it) all keep it.
 
 **The end: the music fades, in every module.** A game asks to end
 through the kit (`startkey` at the load's end, `gk_done` at game over);
@@ -805,7 +805,7 @@ exactly, PAL, NTSC and a C128; the split still lands in its rows. In a
 pilot or a header the last pitch holds, as Novaload's does; once
 `ld_state` bit 7 is set the gate goes off, and `stop` sets the volume
 to 0. The module's settings byte (+35) has bit 2 for it (`petscii.py
--screech`, PETSCII-LM's line 9). It owns the SID: `init` doesn't start a
+-screech`, PETSCII-LM's line 8). It owns the SID: `init` doesn't start a
 tune, and stops one already playing (+28 bit 4: the music first's or a
 chain's) with the kit's `mstop`; the PC tool then cues a tune to a
 second module (`-musicstart second`).
@@ -819,8 +819,9 @@ loader core didn't change; the core has 2 to 23 bytes free in its four
 pages, too few for anything.
 
 - **The switch is a module to the core.** The tool assembles
-  `src/chain.asm` (112 bytes) for A and B's entry points and loads it to
-  $0380 with A's parts. The tape buffer is free once the core runs:
+  `src/chain.asm` (112 bytes then; 136 at $0378 since it copies a staged
+  screen: "A module that moves", below) for A and B's entry points and
+  loads it with A's parts. The tape buffer is free once the core runs:
   stage 1's header part ran there, and the core's exit stub, copied to
   $0334-$0371, goes there only after the modules have stopped. The
   core's `pt_init` is A's init, `pt_frame` and `pt_stop` the switch's.
@@ -854,12 +855,10 @@ pages, too few for anything.
   Flappy-Load, whose init draws its screens.
 - **Memory.** B loads while A runs: they can't overlap, and the tune
   must miss both (`SS.game_ok` against each, the tune placed clear of
-  both). PETSCII-Load at $E000 overlaps every other module, so a chain
-  builds it at $A000 (`petbase`; `tools/build.py` makes
-  `petscii_chain.prg` beside the usual one, and its screen part is the
-  same). The screen part's origin is a setting too (`lowat`): the
-  assembler only moves forward, so the $A000 build assembles a copy of
-  it at $9C00, which is thrown away. The program's live blocks come
+  both). To 0.17.0 a PETSCII screen for a chain was a second build at
+  $A000 (`petscii.py -chain`, PETSCII-LM's line 8); now either module
+  moves a VIC bank down where they would overlap ("A module that moves",
+  below). The program's live blocks come
   after the switch, so only B's claims and the tune's push its bytes to
   after the module; A's memory is the program's once B runs.
 - **Speeds.** B's blocks load at A's margin (A's jitter) and A's share
@@ -877,7 +876,8 @@ pages, too few for anything.
   B's file (a block's source 3: `readb`, channel 5), as the program's
   blocks come from the program's file. The motor is stopped while each
   block is read, so the disk has the time. The header bytes the tape
-  needs (+13 to +28) are written over its first block as it is read.
+  needs (+4 to +31: B's, moved if it moved) are written over its first
+  block as it is read.
   B's blocks are in its file's order, at A's jitter and share (the block's
   set byte's bit 1 picks `mdjit+1` and `mdshr+1`), and the program's at
   B's. To stay small it treats A's memory as the program's after-the-
@@ -983,6 +983,257 @@ follow play only where they are.
 The tool then chooses the tune's place, the picture's VIC bank and the
 show module's address together: clear of the loader, I/O and each other,
 with the least of the program under them.
+
+
+### A module that moves
+
+The user's rule (2026-11-20): "once written", a module can "easily be
+used as first or second in a chain", and the mastering tools do the
+relocation. Every demo module was built for VIC bank 3, so any two of
+them overlapped; a PETSCII screen had its own second build at $A000 for
+a chain's first, and OZ GOLD (which needs $BC00 for the ROM font, as a
+PETSCII screen does) couldn't be second after a game at all.
+
+- **One move: a VIC bank down.** A module runs in bank 3 or, moved, in
+  bank 2, $4000 lower. Nothing else moves: a part below $C000 (a screen
+  at $BC00 shown with the ROM font, which the VIC sees only in banks 0
+  and 2, a font of its own at $B000) stays. So a moved module's bytes
+  differ from the built ones only in the high bytes of its own
+  addresses, by $40: one list of byte places is the whole relocation,
+  with no list of low bytes or of differences.
+- **Found by building twice.** Each module's source names its bank's
+  base `mb` and writes every address of its own from it. `tools/build.py`
+  assembles it with `mb = $c000` and `$8000` and compares; any byte
+  that differs by other than $40 stops the build. That found the
+  addresses the sources still wrote as numbers ($C400, $E000 in the
+  games' screens and tables): all of them were changed to `mb+...`.
+  The VIC's bank comes from the module's own address at run time
+  (`gk_bank`, in `modinit.asm`, `init`'s only: Crossy-Load's low part
+  had no room for it in the kit).
+- **The list in the file.** A block after the parts, at address $0000
+  (no part can be there), so old readers that stop at the last part
+  aren't confused by it and a module without one still reads: per
+  part, a byte for each gap (1-254; 255 for 254 with no byte moved; 0
+  ends the part), then the header's bank bytes (the show module's +25,
+  $DD00's bits: one more a bank down). 73 to 598 bytes for the demo
+  modules. +27 bit 7 says it is there.
+- **The tools' choice**, the same in all three (`slopload.py`'s
+  `chain_fit`, `c64model.py`'s, SlopLoad 64's `chfit`): no move if they
+  don't overlap; else the first, if moving it clears them; else the
+  second; else refused. Moving the first first keeps the common case (a
+  loading screen, then a game or a picture) the same as the old $A000
+  PETSCII build. Their claims a bank down follow a rule (each claim at
+  $C000 or above $4000 lower, $FFFF or the top $C000), not the moved
+  header, so SlopLoad 64 can decide without A in its pool; `build.py`
+  checks that each module's header claim moves the same way.
+- **Tested by running it moved.** `tests/movecheck.py` masters a chain
+  with the module moved whether or not it must be (the PC tool's
+  `SLOPLOAD_MOVE` hook), plays it in VICE with a joystick that wanders,
+  and stops on any read or write of $C000-$CFFF or $E000-$FFF9 by code
+  at $8000-$BFFF: a missed address. All ten demo modules (eight `.lm`,
+  a PETSCII screen, a picture) and Hello-Load pass, first and second.
+- **SlopLoad 64: A in the pool, B as it is read.** A moved is relocated
+  in its pool (`gmove`: the bytes, then the part headers' addresses,
+  then parsed again). B moved can't be: B is read from its file block
+  by block as the tape is written (above), into a block buffer, while
+  the pool holds A. So at line 4 B's relocations are copied out of its
+  file's image (by way of $A000) to the pool after A's file, and
+  `readb`'s byte reader (`rdbr`) takes $40 off each byte the list names
+  as it comes off the disk, a cursor through the list kept with the
+  file's place. A's file and B's list must fit the pool together, and
+  the music first's show module sits above them ($F800), so it needs
+  them under 10 KB.
+- **Room: 920 bytes in a program with 274 to spare.** The code is
+  about 900 bytes. It came from data moved out of the program into
+  memory nothing used: the claim and placement lists after a prepared
+  tune's relocations at $C700 (those packed as gaps, a byte each, in
+  530 bytes of its 1,024, `mgaps`: a tune's offsets are in order), the
+  chain's saved fields after the KERNAL header at $CFC2, a dozen
+  variables in the tape buffer's spare bytes ($0334-$033B, $03EE-$03F8,
+  SlopLoad 64 writing tapes with its own code), the show module's
+  relocations packed as gaps (394 bytes to 198), and the tune's title
+  and workspace list; all made 0 at the start. That left 2 bytes.
+- **More room: the KERNAL file's repeats.** The KERNAL writes each of
+  its two blocks twice, the second copy's nine countdown bytes $09-$01
+  where the first's are $89-$81; the data and its check byte are the
+  same. A byte is 20 symbols, 4 to a buffer byte, the first skipped, so
+  only the first 45 buffer bytes of a copy depend on the countdown.
+  Each repeat is now made whole at $A000 (free when the tape is begun),
+  its first 45 bytes kept, and written as two sections: those, then the
+  first copy's from byte 45 on. The pulses are the same (every C64 case
+  matches the model's tape byte for byte); the buffers are 1,297 bytes
+  smaller, two sections more (93 of the list's 96 at most).
+- **Two screens at $BC00: the second staged** (the user, 2026-11-20:
+  "if chaining one petscii to another petscii, the overwriting on the
+  screen should only happen once the second module has loaded"). The
+  bank move leaves a module's parts below $C000 where they are: a
+  screen shown with the C64's font must stay in bank 2, and moving it
+  within the bank would mean relocating its address in the code and in
+  `$D018` too. So after the other choices fail, where only the second's
+  parts below $C000 (not its main part) are in the first's memory, the
+  span of them in whole pages loads at the highest free page (claimed
+  as the second's, so the tune and the program keep out) and the switch
+  copies it into place, between the screen going off and the second's
+  init: 24 bytes more in `src/chain.asm`, which moved from $0380 to
+  $0378 to fit (136 bytes, to $03FF). SlopLoad 64 patches the three
+  bytes (pages, from, to) as it does the switch's vectors; its blocks
+  for those parts get the staging place's page. Last in the order, so
+  every pair that chained before chains the same way.
+- **A file longer than the pool.** A picture's module is 12,080 bytes;
+  with its 268 bytes of relocations it passed SlopLoad 64's 12,282.
+  Rather than drop pictures' lists, `fload` reads a module to the pool's
+  end and the parser takes a list cut short as none: such a module
+  loads as before and doesn't move (the other one does). The model has
+  the same rule (`HP_MAX`). That left a picture's partner with nowhere
+  for its list (the picture's file fills the pool), and a picture drawn
+  in before a PETSCII screen, which 0.17.0 could chain, was refused: so
+  where the list doesn't fit after the first's file it goes to a buffer
+  of its own, 512 bytes below $A000 (`blbuf`, past the music pool:
+  `BL_MAX` in the model), enough for every demo module's list but
+  Crossy-Load's (610).
+
+### OZ GOLD as a PETSCII screen
+
+OZ GOLD was the first loading screen: a module of its own code (5.6
+KB), written before PETSCII-Load, with its screen as a second part at
+$BC00, its own counter, TAPE ERROR and PRESS SPACE on a row of the
+screen, and its medley built in. PETSCII-Load then made the same thing
+general, and the two kept apart only by history. The user, 2026-11-20:
+OZ GOLD "is in itself supposed to be a PETSCII-LM", then "rebuild OZGOLD
+so that it conforms as a PETSCII-LM".
+
+- **Its source is a screen and one option.** `mkscreen.py` writes
+  `ozgold.pet` (the design, byte for byte the old one but for the
+  counter's placeholder digits) and `ozgold.opt` holds `-counter 24,24`.
+  `tools/build.py` makes PETSCII-Load with them (`build_screens`: any
+  `modules/NAME/NAME.pet` without a `NAME.asm`), after the assembled
+  modules, since it needs PETSCII-Load built.
+- **The same files as before**: `ozgold.lm`, and `ozgold.prg` with its
+  screen's part and parts file, so nothing that names them changed. Its
+  labels for the tests are PETSCII-Load's.
+- **What went with the code.** The medley is no longer in the module:
+  it is `music/build/ozgold.sid`, chosen like any tune (the modules
+  brought no music of their own already, but for this one). A tape
+  error shows in the border (red), as on any PETSCII screen, not as
+  words on row 21, and `-wait` holds at 000 with no PRESS SPACE.
+- **Checked as a PETSCII screen**: `tests/petsciicheck.py --module
+  build/modules/ozgold.lm` (the old `ozgoldcheck.py` is gone, its
+  cut-off check now in `petsciicheck.py`), and `tests/petsciilm.py`
+  makes it on the C64 from the disk's `ozgold.pet` and compares it with
+  the build's, byte for byte.
+
+### A module from any assembler: PRG-LM
+
+The user, 2026-11-20: "is it possible for someone to use a C64 without
+a PC to assemble a loader module", "just assemble using CBM Prg Studio?
+or any of the C64 assemblers? if they need extra code, can that be
+printed out so that they can add it to their own creations?"
+
+A module never needed SlopLoad's build to be assembled: it calls
+nothing of the loader's and includes nothing (Hello-Load is one file).
+What the build added was the file: the part's length after its address,
+and the relocations, found by assembling twice. On a PC the mastering
+tool took a module's `.prg` already; on a C64 nothing made a `.lm`.
+
+- **A converter, not a change to SlopLoad 64.** SlopLoad 64 could have
+  been taught to read a `.prg` (it has 234 bytes spare), but a `.prg`
+  can't carry relocations, so a module made that way could never move,
+  and the reader is used in the pool, in the second's stream and in
+  the model. A separate program touches none of it.
+- **Two builds compared, as `tools/build.py` does.** Writing a
+  relocation list by hand is 73 gap bytes for Hello-Load. Any
+  assembler can assemble twice with one line changed, so
+  `tools/prglm.py` and PRG-LM take both programs and apply the build's
+  own checks (every difference $40, a part below $C000 the same, the
+  claim moving with it). `tests/prglmtest.py` holds them to the build's
+  `.lm` for every demo module.
+- **PRG-LM is BASIC, so it can be printed.** It is 105 lines of 80
+  characters or fewer, typed in as listed; `LMGUIDE.md` prints it and a
+  test keeps the print the same as `c64/prglm.bas`. The price is time:
+  `GET#` a byte at a time, each part read twice (once to count and
+  compare, once to copy: the length goes before the bytes), about four
+  minutes for 2.6 KB on a 1541. A machine-code tool like the others
+  would take seconds; it would not be a listing.
+- **It asks the drive before it reads.** The first version read a file
+  straight after opening it. With a name that isn't on the disk, about
+  one run in 25 in VICE (a C64 or a C128, a true-drive 1541) the drive
+  never took the bus and the KERNAL waited for it for ever (at $EDD6:
+  no time limit there), the C64 dead until a reset. The full suite
+  caught it on the C128. PRG-LM now opens the drive's command channel
+  first, reads its answer after each OPEN ("62, FILE NOT FOUND") and
+  never reads a file that didn't open; it closes the files before the
+  command channels, since closing a command channel closes every file
+  on its drive. 500 runs of the missing-file case since, none hung.
+- **Its look.** Questions in the other tools' words (a default in
+  brackets before the question mark, `$` for the disk's files, each
+  file on a drive of its own, no row to column 40), but no numbered
+  menu, and no version in its title: the printed listing then stays the
+  same from release to release.
+- **On the B side.** It is 18 blocks and the 1541 disk has 20 left,
+  which the disk tests write into, so 0.19.0 had it on the 1581 disk
+  only. It is now on a second 1541 disk with the other things a
+  module's writer needs ("The B side", below).
+- **The least module** (`LMGUIDE.md`) is the answer to "extra code":
+  the header and three routines, 87 bytes, with no local labels so that
+  it goes into any assembler. The test assembles it out of the guide's
+  text and loads it four ways.
+
+- **Tried with Turbo Macro Pro v1.2** (the user: "Yes, try it"; its
+  disk from Style's own site, run only in VICE). What a listing in prg
+  Studio's spelling needs there turned out to be more than `.byte` for
+  `byte`: sums are worked out left to right (Hello-Load's `bitmap+3*320`
+  must be `bitmap+(3*320)`), a line is one row of the screen (Hello-Load's
+  address tables, five to a line, come out as "bad line" until split),
+  `_` is C= and @, the assembler sits at $8000-$CFFF so the module is
+  assembled to disk, and BASIC needs `NEW` before PRG-LM will load. The
+  guide says each. `tests/tmproute.py` respells the two sources by
+  those rules, has Turbo Macro Pro read them in as text files and
+  assemble them, and compares: the same bytes as `tools/asm6502.py`, and
+  PRG-LM's `.lm` the same as the build's. It is not in the suite (it
+  needs the downloaded disk).
+
+### The B side: NOTES, and what a module's writer needs
+
+The user, 2026-11-20, on PRG-LM being on the 1581 disk only: "I would
+just make a second d64 with the development tools, including the demo.
+Also maybe you could make a simple SEQ-file reader noter program that
+contains instructions for the suite on the B side. You will probably
+have to break the documents into SEQ files."
+
+- **What is on it.** `build/slopload64-b.d64`: NOTES and its chapters,
+  PRG-LM, `hello-load.lm` (the demo), and the two sources the guide
+  goes through as text files spelt for Turbo Macro Pro (`least.s`,
+  `hello.s`: `tools/tmpsrc.py`, the respelling `tests/tmproute.py` had
+  Turbo Macro Pro assemble to the build's bytes). 578 of the side's 664
+  blocks. The .d81 has both sides. The A side is as it was.
+- **Which documents.** The side holds about 160 KB and the documents
+  are 460 KB, so: the manual's C64 part (SlopLoad 64 and every tool on
+  the disks, and "Tape errors"), LMGUIDE.md and LMFORMAT.md, 121 KB as
+  the C64 has them. Not the PC tool's part of the manual, MODULES.md
+  (the kit's sources aren't on the disk), DESIGN.md or the release
+  notes.
+- **Made from the documents at every build** (`tools/c64docs.py`), not
+  written apart, so they can't fall behind: a chapter for each heading
+  (48), a line 39 columns at most so that none reaches column 40 and a
+  page is a count of lines, each line starting with its colour. A
+  table's row becomes its first cell with the others under it; a
+  listing's comment goes on the line after its instruction. PRG-LM's
+  listing is left out (80-column BASIC lines; the program is on the
+  disk).
+- **NOTES is machine code** (`c64/notes.asm`, 1.5 KB), where PRG-LM is
+  BASIC: BASIC's `GET#` shows a page in half a minute. It prints a
+  file's bytes as they come, with quote mode switched off after every
+  one (a quotation mark in the text would otherwise turn the next
+  line's colour into a reversed letter). It asks the drive whether a
+  file opened before reading it, as PRG-LM learnt to. RETURN alone
+  reads the next chapter, so the whole of it reads with one key.
+- **The menu's look** is the other tools': the title with the version,
+  the grey line, numbered choices, `WHICH [n]?`, no row to column 40.
+  The list is in the upper case set as their menus are; a chapter is in
+  the lower and upper case set, since it is prose.
+- `tests/notescheck.py` reads four chapters through in VICE and holds
+  every line on the screen to the file, on PAL, NTSC and a C128, and
+  holds the disks to what the tools make.
 
 ## 9. Real tapes, CD and MP3
 
@@ -1382,3 +1633,61 @@ codes, the colours. The drive asked for a file becomes the screen's (or
 the font's) only once the file is read or written, so RETURN alone at
 a name keeps both. A font is read as PETSCII-LM reads one, so the editor
 shows what the module will.
+
+## 14. The tests' emulator: the clock at a stop
+
+The tests stop VICE at checkpoints through its binary monitor
+(`tests/vicemon.py`), and some of them need the instruction that ran
+last before a stop, or the emulated clock at its start: the frames
+between two play calls, which store wrote the border. VICE gives both
+only through its CPU history (the monitor's command $86), and VICE 3.10
+has a fault there (`tests/vicefault.md`): the command never answers when
+the history's write position is on the buffer's last entry, one position
+in 50,701, and the emulator spins from then on. A test that asked at
+every frame of a long load stalled in about one run in ten, and nothing
+in the test said why: it looked like a machine too busy.
+
+No form of the command is safe at that position, and a client can't read
+the position. It can set it: any set of the resource `MonitorChisLines`
+puts it at 0 (to the resource's own value, the entries are kept; to
+another, they are cleared). So a test that will ask says so
+(`TestVice(..., clock=True)`), and its runs are tracked:
+
+- the buffer is made 1,000,001 entries (`RING`), cleared once;
+- `run()` lets the machine go in legs of at most 60,000 of the
+  computer's instructions (`LEG`, the monitor's command $71), the
+  position set to 0 before each. A leg that runs out with no checkpoint
+  hit isn't the caller's stop: the next leg follows. So at every stop
+  the position is at most one leg's entries: its 60,000 and what the
+  drives' CPUs ran meanwhile, which share the buffer. To reach the end
+  they would have to run more than 15 instructions for each of the
+  computer's through a whole leg; a 1541 and a 1581 together run at most
+  1.5 a cycle, and the computer's instructions take 3 to 4 cycles:
+  about 6. An REU's transfer is one instruction of up to 131,072 cycles
+  (64 KB swapped): that many entries again with a 1581, still inside;
+- setting the position loses VICE's own note of which entry is the
+  newest until an instruction has run, and a stop can come before one
+  has (a checkpoint on the very instruction a leg ended at). So the
+  newest entry is read and kept before each set (the base), and an
+  answer no newer than the base is the base;
+- a checkpoint that stops a leg leaves the rest of its count pending in
+  the monitor: a plain resume would stop by itself when it ran out.
+  `resume()` and `reset()` cancel it (a leg of 0 instructions runs
+  free); after them the position isn't known, the history is cleared at
+  the next `run()`, and `last()` and `clock()` refuse in between;
+- the history command gets 30 seconds of its own. If it ever goes
+  unanswered the test stops there with the fault's name, where it used
+  to wait out its whole timeout.
+
+What the machine does is the same in legs as in one run: a leg's end is
+a stop like any checkpoint's, between two instructions.
+`tests/trackcheck.py` checks it on the KERNAL's interrupt at the READY
+prompt: the clock from stop to stop is the timer's period with legs of
+60,000 instructions, of 100 and of 7; the last instruction is the right
+one with legs of 1, where every stop comes before anything has run in
+its leg; and, in a second VICE with a buffer of 50,706 and no true
+drive, legs of 50,704 answer and legs of 50,705 are caught as the fault.
+A tracked run costs two or three more monitor commands a leg, about
+0.6 ms each: a few percent of a long load. Tests that never ask (most of
+them, and all of SlopLoad 64's suite) run as they always did, in one
+plain resume.

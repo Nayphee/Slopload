@@ -14,17 +14,24 @@
 ;   - in the vertical blank the screen off, the sprites off and back to
 ;     one size, in front, one colour; 40 columns and no fine scroll
 ;     (what the core leaves a module's init: the screen off);
+;   - the second's parts that stay below $c000 and were in the first's
+;     memory (a screen at $bc00 for the C64's font, a font of its own),
+;     loaded beside it while the first showed, copied to their place a
+;     page at a time (the tool's: stpages from stfrom's page to stto's);
 ;   - the second's init, then its frame.
 ; The first's stop is never called: its tune plays on, and the second,
 ; told so (header +28 bit 4: the tool's), doesn't start it again.
 ;
-; At $0380 in the tape buffer: stage 1's header part ran here and is
+; At chainat in the tape buffer: stage 1's header part ran here and is
 ; done with once the core runs, and the core's exit stub ($0334-$0371)
 ; goes there only after the modules have stopped.
 ; ------------------------------------------------------------
         incasm "abi.asm"
 
-chainat = $0380
+chainat = $0378
+stpages = 0                     ; the tool's: the second's staged pages, none
+stfrom = $c0                    ; ... loaded at this page
+stto = $c0                      ; ... and theirs
 a_frame = $c003                 ; the tool's: the first module's frame and
 a_stop = $c006                  ; stop, the second's init, frame and stop,
 b_init = $c000                  ; the program's progress a page (8.8), and
@@ -70,7 +77,18 @@ cframe  lda ld_ev
         sta $d01d
         lda #$08                ; hires, 40 columns, no fine scroll
         sta $d016
-        jsr @in
+cst     ldx #stpages            ; the second's staged pages to their place
+        beq csgo
+        ldy #0
+csl     lda stfrom*256,y
+css     sta stto*256,y
+        iny
+        bne csl
+        inc csl+2
+        inc css+2
+        dex
+        bne csl
+csgo    jsr @in
         jmp (cbfr)
 @in     jmp (cbin)
 

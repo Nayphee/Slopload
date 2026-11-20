@@ -1,5 +1,252 @@
 # SlopLoad releases
 
+## 0.19.1 (2026-11-20)
+
+A second 1541 disk, the B side: the suite's instructions to read on the
+C64 itself, with what a module's writer needs beside them. Both suites
+pass in VICE on this build, run side by side, with no case run a second
+time (303 PC cases; 129 SlopLoad 64 cases); PETSCII-LM's and
+PICTURE-LM's own tests pass on PAL, NTSC and a C128, SID-SLM's short one
+on PAL, and Hello-Load goes through Turbo Macro Pro and PRG-LM to the
+build's own file. Not played on a real C64.
+
+**The B side: a second 1541 disk for a module's writer, with the
+instructions on it.** `build/slopload64-b.d64` (the .d81 has both sides):
+
+- **NOTES**, a reader for the suite's instructions on the C64 itself:
+  `LOAD"NOTES",8`, `RUN`, a numbered list of 48 chapters, a page at a
+  time (`c64/notes.asm`, 1.5 KB of machine code, the other tools' look).
+  RETURN alone reads the next chapter;
+- **the chapters**, text files made from the documents at every build
+  (`tools/c64docs.py`): the manual's C64 part (SlopLoad 64 and every
+  tool on the disks, tape errors), LMGUIDE.md and LMFORMAT.md, in 39
+  columns with headings white and listings light blue. Any program that
+  reads a SEQ file can show them;
+- **PRG-LM**, which 0.19.0 had on the 1581 disk only, and
+  `hello-load.lm`, the demo;
+- **`least.s` and `hello.s`**: the least module and Hello-Load already
+  spelt for Turbo Macro Pro, as text files its editor reads in
+  (`tools/tmpsrc.py`).
+
+The A side is unchanged. `tests/notescheck.py` (in the suite on PAL,
+NTSC and a C128) reads chapters through in VICE against their files and
+holds both disks to what the tools make.
+
+## 0.19.0 (2026-11-20)
+
+A module can be made with any assembler, or on a C64 with no PC at all:
+a converter from an assembler's program to a `.lm` (PC and C64), the
+code a module needs printed in the guide, and the whole way tried with
+Turbo Macro Pro. The tests' occasional stall is traced to a fault in
+VICE, and the tests now keep clear of it. Both suites pass in VICE on
+this build, run side by side, with no case run a second time (300 PC
+cases; 129 SlopLoad 64 cases); PETSCII-LM's and PICTURE-LM's own tests
+pass on PAL, NTSC and a C128, SID-SLM's short one on PAL, and Hello-Load
+goes through Turbo Macro Pro and PRG-LM to the build's own file. Not
+played on a real C64.
+
+**A module from any assembler, or made on a C64 alone.** A module needs
+nothing of SlopLoad's to be assembled, and now nothing of the PC's to
+become a `.lm`:
+
+- `tools/prglm.py OUT.lm MAIN.prg [PART.prg ...] [-lower ...]` writes a
+  module's `.lm` from the programs any assembler wrote (CBM prg Studio,
+  an assembler on a C64), and its relocations from the same programs
+  assembled with `mb = $8000`: the same file `tools/build.py` writes,
+  for every demo module;
+- **PRG-LM** does the same on a C64: a BASIC program (`c64/prglm.bas`,
+  105 lines), `prg-lm` on SlopLoad 64's 1581 disk (the 1541's has no
+  room for it) and printed in `LMGUIDE.md` for typing in. Each file on
+  a drive of its own, `$` for a disk's files. Slow, as BASIC is: about
+  four minutes for Hello-Load on a 1541. It asks the drive whether each
+  file opened before it reads one: reading a file that isn't there can
+  leave a C64 waiting for ever (about one try in 25 in VICE; the suite
+  caught it). `tools/bastok.py` makes the listing a program for the
+  disk;
+- `LMGUIDE.md` has a new part, "With any assembler, or on a C64 alone":
+  what the build does and how to do without it, the least module there
+  can be (87 bytes: the header and three routines, to type in or start
+  from), the same listing's spelling in other assemblers, and the way
+  from an assembler to a tape with no PC. `LMFORMAT.md`, `MODULES.md`
+  and `README.md` say where it is;
+- `tests/prglmtest.py` (in the suite: `prglm-pc`, `prglm-guide`,
+  `prglm-c64` on PAL, NTSC and a C128) checks all of it, the guide's
+  printed listings included.
+
+SlopLoad 64 itself is unchanged: it reads `.lm` files as before.
+
+**Tried with a real C64 assembler: Turbo Macro Pro v1.2**, in VICE. The
+least module and Hello-Load, respelt for it, assemble there to the same
+bytes as here, PRG-LM makes the same `.lm` files from its programs, and
+SlopLoad 64 mastered a tape with the least module's that loaded.
+`LMGUIDE.md` has the steps and what the respelling is: `.byte` and
+`.word`, a name for every `@` label, brackets round a product in a sum
+(Turbo Macro Pro works sums out left to right), lines that fit a row of
+the screen, C= and @ for `_`, assembling to disk, and `NEW` before
+`LOAD"PRG-LM"`. `tests/tmproute.py --tmp DISK` repeats it (not in the
+suite: Turbo Macro Pro's disk is not SlopLoad's to hand on). The source
+went in as a text file its editor reads, not key by key; no other C64
+assembler was tried.
+
+**The tests' stall, found: a fault in VICE.** The tests that timed out
+now and then with the emulator's monitor silent (0.18.1's
+`cutoff-petscii-ntsc`; `cutoff-ozgold` before it) met a fault in VICE
+3.10, not one in the loader or in the tests: its CPU history command
+never answers when the history's write position is on the buffer's last
+entry, one position in 50,701, and a test that read the clock at every
+frame of a load asked thousands of times a run. The machine being busy
+had nothing to do with it. Two of 0.18.0's three cases "timed out while
+the machine was busy" read the clock the same way (`playgaps-ntsc`,
+`playgaps-ntscold`), so this is the likely cause there too; the third,
+`piclm-formats`, reads no clock, and its one timeout isn't explained by
+this.
+
+- `tests/vicefault.md` has the cause (the lines of VICE's source) and a
+  report ready for VICE's bug tracker, in the form the tracker asks for:
+  AI use said at the top, every statement a link to VICE's source or
+  the output of a reproduction, the fix apart for its patches tracker.
+  `tests/vicefault.py` shows the fault with nothing of SlopLoad's: with
+  the position set to 0 and 50,699 instructions run VICE answers, with
+  50,700 it never does (its text monitor's `chis` prints the history
+  without end), with 50,701 it answers. The fault is still in VICE's
+  current source (r46417, 15 November 2026) and unreported there. The
+  fix, one line, was tried on a copy of 3.10: all cases answer, and the
+  history elsewhere is as before. The VICE here is not changed, and
+  nothing was sent to anyone;
+- the tests' monitor client keeps clear of it (`tests/vicemon.py`,
+  `DESIGN.md` section 14). A test that reads the clock says so
+  (`TestVice(..., clock=True)`); its emulator then runs in legs of
+  60,000 instructions, the history's position set back before each,
+  where the position can't come near the end, and `clock()` and `last()`
+  give what the history gave before. A history command left unanswered
+  is said so by name in 30 seconds, where it took the test's whole
+  timeout. The tests that never read the clock run as they did;
+- `tests/trackcheck.py` (in the suite: `track-check`,
+  `track-check-ntsc`) checks the client, and catches the fault where a
+  leg as long as the history's buffer forces it;
+- a test's VICE now has a minute to exit before it is killed (it had 5
+  seconds): VICE writes its disk images as it exits, and a file read
+  back from one could be missing. Its log is cut to its start and end
+  when it grows past 256 KB.
+
+With the client's change, in VICE: the two cutoff tests 24 times each,
+six at once, 48 of 48 (about one run in ten stalled before). The
+suites' first run with it found PRG-LM's fault above (`prglm-c64-c128`
+timed out, for a reason of PRG-LM's own, not the clock's); this
+release's runs are at the top.
+
+## 0.18.1 (2026-11-20)
+
+OZ GOLD, the loading screen, is now made as any PETSCII screen is.
+Both suites pass in VICE on this build (293 PC cases, one of them,
+`cutoff-petscii-ntsc`, on a second run: in the full run the emulator's
+monitor stopped answering the test and it timed out, which it does now
+and then while the machine is busy, and the cause isn't found; 129
+SlopLoad 64 cases); PETSCII-LM's and PICTURE-LM's own tests pass on PAL,
+NTSC and a C128. Not played on a real C64.
+
+**OZ GOLD is a PETSCII screen now.** It was a module of its own code;
+it is now its screen (`modules/ozgold/ozgold.pet`, the same design) in
+PETSCII-Load, with the counter in its BLOCKS TO LOAD box: what
+`tools/petscii.py` and PETSCII-LM make of that file with a counter at
+row 24, column 24. `tools/build.py` makes it (any `modules/NAME/NAME.pet`
+with no `NAME.asm` is built this way, its options in `NAME.opt`), and
+`ozgold.pet` is on SlopLoad 64's disks, where PETSCII-LM makes the same
+`ozgold.lm` from it, byte for byte. It looks and counts as before, and
+chains as any PETSCII screen does. What changed with it:
+
+- its medley is no longer built in: choose it as the tune
+  (`-sid music/build/ozgold.sid`; `ozgold.slm` on SlopLoad 64's line 5).
+  With no tune chosen it is silent;
+- a tape error shows as a red border, as on every PETSCII screen, in
+  place of the flashing TAPE ERROR on row 21;
+- with `-wait` it holds at 000 without writing PRESS SPACE (put a prompt
+  in the screen if you want one);
+- `ozgold.lm` is 4,358 bytes (it was 7,043): 18 blocks on the disk, and
+  it loads about 4 seconds sooner at speed 0.
+
+`tests/ozgoldcheck.py` is gone: OZ GOLD is checked as any PETSCII
+screen (`tests/petsciicheck.py --module build/modules/ozgold.lm`).
+
+## 0.18.0 (2026-11-20)
+
+Any module can now be first or second in a chain: where the two would
+share memory, the tools move one of them a VIC bank down, and two
+screens that need the same place take turns in it. A guide to writing a
+module by hand, with a demo module of its own, and the `.lm` format
+described byte by byte. Both suites pass in VICE on this build (290 PC
+cases, three of them on a second run after timing out while the
+machine was busy; 129 SlopLoad 64 cases); PETSCII-LM's and PICTURE-LM's
+own tests pass on PAL, NTSC and a C128. Not played on a real C64.
+
+**Every module first or second in a chain.** Until now a chain's two
+modules had to be built apart: a PETSCII screen made for a chain at
+$A000 (`petscii.py -chain`, PETSCII-LM's line 8), and anything that
+needs $BC00 for the C64's font (OZ GOLD) could never be second after a
+game. Now each module's `.lm` carries the list of its own addresses
+(a block after its parts, at $0000), and where a chain's two modules
+would overlap, `slopload.py -then` and SlopLoad 64's line 4 move one of
+them a VIC bank down, from $C000-$FFF9 to $8000-$BFF9: the first if
+that clears them, else the second; the report (`moved a VIC bank
+down`) and line 4 (`THE FIRST GOES A VIC BANK LOWER`, `IT GOES ...`)
+say which. Every pair of the demo modules chains now, in either order.
+`tools/build.py` finds a module's list by building it a second
+time a bank lower and comparing, so a module of your own moves if it
+writes every address of its own from one name (`mb = $c000`) and picks
+its VIC bank with the kit's new `gk_bank` (MODULES.md). PETSCII-LM and
+PICTURE-LM write the list with the module, as `tools/petscii.py` and
+`tools/picturelm.py` do. All the demo modules are rebuilt this way, so
+make your own `.lm` files again: one from before still loads and plays,
+but can't move. `petscii.py -chain` and PETSCII-LM's line 8 are gone
+(its line 9, the sound, is now 8). `tests/movecheck.py` plays a module
+moved, first or second, and stops on anything it reads or writes in
+its old bank: every demo module passes both ways.
+
+**Two PETSCII screens, or a PETSCII screen and OZ GOLD, in one chain.**
+Both keep their screen at $BC00, where the VIC sees the C64's own font.
+Now the first moves a bank down, and the second's screen (its parts
+below $C000) loads aside while the first shows, at the top of memory;
+the switch copies it into place once the second is in, with the screen
+off, so the first screen stays whole until the second takes over. The
+report says where it waits (`load at $FB00`), and so does SlopLoad 64
+under line 4 (`ITS SCREEN WAITS AT $FB00 TILL THE SWITCH`).
+`tests/stagecheck.py` plays such a chain in VICE: the first screen
+unchanged but for its own counter and scroller for every frame it
+shows, and the second's in place, byte for byte, before its init.
+
+**SlopLoad 64** moves the first module in its own memory, and the
+second as its blocks are read from the disk (its list kept in memory
+beside the first's file). A module file longer than its 12,282 bytes
+of room (a picture with its list) is read to there: it loads as before,
+and doesn't move. The other module does, its list then in a buffer of
+its own, 512 bytes: enough for every demo module but Crossy-Load, which
+can't follow a picture on a C64 (on a PC it can). Room for all this: data moved
+out of the program into memory it didn't use, the tune's relocations
+packed a byte each, and the KERNAL file's second copies, which differ
+from the first only in their countdown bytes, now written from the
+first's symbols but for their first 45 bytes (1,297 bytes of buffers
+freed). It has 234 bytes to spare.
+
+**LMFORMAT.md: the `.lm` format,** every byte of the file, the header,
+the calls, the memory, and the relocations: how a module is moved and
+how to make one that moves.
+
+**The module papers, checked against the code.** MODULES.md's quick
+start gave a `-module` name the tool no longer takes (it wants the
+file: `build/modules/mymodule.lm`); its header example, the chain's
+switch (now 136 bytes at $0378), the `.lm` section and the five games'
+memory table are as the code is now, and its tests list has the two new
+checks.
+
+**LMGUIDE.md: your first module, by hand.** A beginner's guide that
+writes Hello-Load (`modules/hello/`), a red hot-air balloon steered
+over green hills under HELLO WORLD, with a loading bar: every line of
+its assembly explained, with no kit, from the header and the three calls
+to text in a font of its own, a sprite, a sound effect on the SID, and a
+hires bitmap a pixel at a time. `hello-load.lm` is on SlopLoad 64's
+.d81. The .d64 now has 18 blocks free (34 in 0.17.0): every module on
+it carries its list of relocations, so Hello-Load is on the .d81 only.
+
 ## 0.17.0 (2026-11-16)
 
 A PETSCII screen editor joins the C64 tools: PETSCII-ED, on both disks.

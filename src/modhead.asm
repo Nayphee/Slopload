@@ -44,7 +44,9 @@ hblocks byte 0                  ; +26 the program's size in disk blocks (set by 
                                 ; bit 5); bit 1: its effects on voice 3 (SlopLoad's player);
                                 ; bit 2: it keeps -wait; bit 3: it keeps -countdown; bit 4:
                                 ; second in a chain, it plays on the tune the first started
-                                ; (the kit's sidinit and musicgo); bit 5: it keeps -waitgame
+                                ; (the kit's sidinit and musicgo); bit 5: it keeps -waitgame;
+                                ; bit 7 (tools/build.py's, in the built module): it carries
+                                ; its relocations, so a chain can move it a VIC bank down
 hopt    byte 0                  ; +28 the tool's options: bit 1 -wait (SPACE), bit 3
                                 ; -countdown, bit 4 a chain's tune already playing, bit 5
                                 ; -waitgame (the end of a game)
